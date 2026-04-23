@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+*.log
+.env*.local
+.DS_Store
+next-env.d.ts
+
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
