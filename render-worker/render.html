@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Image Filter Renderer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0b0b0d;
+        color: #d4d4dc;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        overflow: hidden;
+      }
+      #stage {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100vw;
+        height: 100vh;
+      }
+      /* For export, Playwright sizes the viewport to the canvas dimensions
+         and screenshots #stage. For preview, CSS scales the canvas to fit. */
+      #canvas {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      body.export-mode,
+      body.export-mode #stage {
+        width: auto;
+        height: auto;
+      }
+      body.export-mode #canvas {
+        max-width: none;
+        max-height: none;
+      }
+      #svgDefsHost {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+      #placeholder {
+        color: #6a6a78;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="placeholder">Waiting for image…</div>
+    </div>
+
+    <svg id="svgDefsHost" aria-hidden="true">
+      <defs id="svgDefs"></defs>
+    </svg>
+
+    <script src="/filters.js"></script>
+    <script>
+      console.log("[render.html] script loaded", {
+        search: location.search,
+        hasImageFilters: !!window.ImageFilters,
+      });
+      (function () {
+        "use strict";
+        const canvas = document.getElementById("canvas");
+        const svgDefs = document.getElementById("svgDefs");
+        const placeholder = document.getElementById("placeholder");
+        const img = new Image();
+
+        let currentImageUrl = null;
+        let renderToken = 0;
+
+        async function loadImage(url) {
+          if (url === currentImageUrl) return;
+          currentImageUrl = url;
+          img.src = url;
+          await new Promise((resolve, reject) => {
+            img.addEventListener("load", resolve, { once: true });
+            img.addEventListener("error", reject, { once: true });
+          });
+        }
+
+        async function render({ imageUrl, preset, params, seed }) {
+          const myToken = ++renderToken;
+          window.renderComplete = false;
+          document.body.removeAttribute("data-render-complete");
+          try {
+            await loadImage(imageUrl);
+            if (myToken !== renderToken) return;
+            await window.ImageFilters.renderScene({
+              img,
+              svgDefs,
+              canvas,
+              preset,
+              params: params || {},
+              seed: typeof seed === "number" ? seed : 1,
+            });
+            if (myToken !== renderToken) return;
+            placeholder.style.display = "none";
+            canvas.style.display = "block";
+            // Force a paint flush so the SVG filter + canvas compositing are
+            // definitely committed before we announce completion.
+            await new Promise((r) => requestAnimationFrame(() => r()));
+            if (myToken !== renderToken) return;
+            window.renderComplete = true;
+            document.body.setAttribute("data-render-complete", "true");
+            window.parent &&
+              window.parent !== window &&
+              window.parent.postMessage(
+                { type: "rendered", width: canvas.width, height: canvas.height },
+                "*",
+              );
+          } catch (err) {
+            window.renderError = String(err && err.message ? err.message : err);
+            window.parent &&
+              window.parent !== window &&
+              window.parent.postMessage(
+                { type: "error", message: window.renderError },
+                "*",
+              );
+          }
+        }
+
+        // Dashboard iframe path: receive params via postMessage
+        window.addEventListener("message", (e) => {
+          const data = e.data || {};
+          if (data.type === "render") {
+            console.log("[render.html] render message received", {
+              imageUrl: data.imageUrl,
+              preset: data.preset,
+              params: data.params,
+              seed: data.seed,
+            });
+            render({
+              imageUrl: data.imageUrl,
+              preset: data.preset,
+              params: data.params,
+              seed: data.seed,
+            });
+          }
+        });
+
+        // Playwright export path: params on the URL
+        function parseUrlParams() {
+          const q = new URLSearchParams(location.search);
+          const imageUrl = q.get("image");
+          const preset = q.get("preset");
+          const seedStr = q.get("seed");
+          const paramsStr = q.get("params");
+          if (!imageUrl || !preset) return null;
+          let params = {};
+          if (paramsStr) {
+            try {
+              params = JSON.parse(paramsStr);
+            } catch (_) {}
+          }
+          const seed = seedStr ? parseInt(seedStr, 10) : 1;
+          return { imageUrl, preset, params, seed };
+        }
+
+        const urlConfig = parseUrlParams();
+        if (urlConfig) {
+          document.body.classList.add("export-mode");
+          render(urlConfig);
+        } else {
+          // Announce ready to parent
+          window.parent &&
+            window.parent !== window &&
+            window.parent.postMessage({ type: "ready" }, "*");
+        }
+      })();
+    </script>
+  </body>
+</html>
