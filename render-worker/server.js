@@ -29,7 +29,20 @@ function logMem(prefix) {
   );
 }
 
-async function renderJob({ jobId, imageUrl, filterName, filterParams }) {
+async function renderJob({
+  jobId,
+  imageUrl,
+  filterName,
+  filterParams,
+  overlayImageUrl,
+  overlayFilterName,
+  overlayFilterParams,
+  knockoutText,
+  textSize,
+  textPosition,
+  letterSpacing,
+  fontWeight,
+}) {
   // Clear the completion flag *before* dispatching the render message so
   // waitForSelector can't match stale state from the previous job.
   await page.evaluate(
@@ -42,6 +55,14 @@ async function renderJob({ jobId, imageUrl, filterName, filterParams }) {
           preset: msg.preset,
           params: msg.params,
           seed: msg.seed,
+          overlayImageUrl: msg.overlayImageUrl,
+          overlayPreset: msg.overlayPreset,
+          overlayParams: msg.overlayParams,
+          knockoutText: msg.knockoutText,
+          textSize: msg.textSize,
+          textPosition: msg.textPosition,
+          letterSpacing: msg.letterSpacing,
+          fontWeight: msg.fontWeight,
         },
         "*",
       );
@@ -51,6 +72,14 @@ async function renderJob({ jobId, imageUrl, filterName, filterParams }) {
       preset: filterName,
       params: filterParams || {},
       seed: 1,
+      overlayImageUrl: overlayImageUrl || null,
+      overlayPreset: overlayFilterName || null,
+      overlayParams: overlayFilterParams || null,
+      knockoutText: knockoutText || null,
+      textSize: typeof textSize === "number" ? textSize : 15,
+      textPosition: textPosition || { x: 50, y: 50 },
+      letterSpacing: typeof letterSpacing === "number" ? letterSpacing : 0,
+      fontWeight: typeof fontWeight === "number" ? fontWeight : 900,
     },
   );
 
@@ -85,7 +114,20 @@ async function start() {
     if (!isReady) return res.status(503).json({ error: "not ready" });
     if (busy) return res.status(429).json({ error: "busy" });
 
-    const { jobId, imageUrl, filterName, filterParams } = req.body || {};
+    const {
+      jobId,
+      imageUrl,
+      filterName,
+      filterParams,
+      overlayImageUrl,
+      overlayFilterName,
+      overlayFilterParams,
+      knockoutText,
+      textSize,
+      textPosition,
+      letterSpacing,
+      fontWeight,
+    } = req.body || {};
     if (!jobId || !imageUrl || !filterName) {
       return res
         .status(400)
@@ -100,6 +142,14 @@ async function start() {
         imageUrl,
         filterName,
         filterParams,
+        overlayImageUrl,
+        overlayFilterName,
+        overlayFilterParams,
+        knockoutText,
+        textSize,
+        textPosition,
+        letterSpacing,
+        fontWeight,
       });
 
       const durationMs = Date.now() - startTs;

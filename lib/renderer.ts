@@ -12,6 +12,16 @@ export interface ExportJob {
   params: Record<string, unknown>;
   seed?: number;
   origin: string; // e.g. "http://localhost:3000"
+
+  // Optional overlay layer + knockout-text composition.
+  overlayImagePath?: string | null;
+  overlayPreset?: string | null;
+  overlayParams?: Record<string, unknown> | null;
+  knockoutText?: string | null;
+  textSize?: number;
+  textPosition?: { x: number; y: number };
+  letterSpacing?: number;
+  fontWeight?: number;
 }
 
 export interface ExportResult {
@@ -63,6 +73,36 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     url.searchParams.set("preset", job.preset);
     url.searchParams.set("params", JSON.stringify(job.params ?? {}));
     url.searchParams.set("seed", String(job.seed ?? 1));
+
+    if (job.overlayImagePath) {
+      const absOverlay = new URL(job.overlayImagePath, job.origin).toString();
+      url.searchParams.set("overlayImage", absOverlay);
+      if (job.overlayPreset) {
+        url.searchParams.set("overlayPreset", job.overlayPreset);
+      }
+      url.searchParams.set(
+        "overlayParams",
+        JSON.stringify(job.overlayParams ?? {}),
+      );
+      if (job.knockoutText) {
+        url.searchParams.set("knockoutText", job.knockoutText);
+      }
+      if (typeof job.textSize === "number") {
+        url.searchParams.set("textSize", String(job.textSize));
+      }
+      if (job.textPosition) {
+        url.searchParams.set(
+          "textPosition",
+          JSON.stringify(job.textPosition),
+        );
+      }
+      if (typeof job.letterSpacing === "number") {
+        url.searchParams.set("letterSpacing", String(job.letterSpacing));
+      }
+      if (typeof job.fontWeight === "number") {
+        url.searchParams.set("fontWeight", String(job.fontWeight));
+      }
+    }
 
     await page.goto(url.toString(), { waitUntil: "load", timeout: 30_000 });
     await page.waitForSelector('body[data-render-complete="true"]', {

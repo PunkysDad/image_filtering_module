@@ -9,10 +9,25 @@ const FILTERS = [
   "matte-fade",
   "bw-contrast",
   "soft-glow",
-  "canvas-texture",
   "duotone",
   "studio-lighting",
+  "lut-kodak-2383",
+  "lut-bleach-bypass",
+  "lut-teal-orange-pro",
+  "lut-fuji-3510",
+  "lut-cool-fade",
+  "lut-warm-print",
 ];
+
+// Defaults matching public/filters.js control defaults. LUT presets share the
+// same trio of sliders (intensity / grain / aberration); Canvas 2D presets
+// run with the preset's baked-in defaults and need no params sent.
+function defaultParamsForFilter(filterName) {
+  if (filterName.startsWith("lut-")) {
+    return { intensity: 85, grain: 20, aberration: 0 };
+  }
+  return {};
+}
 
 function parseArgs(argv) {
   const args = { jobs: 50, image: null, url: "http://localhost:4000" };
@@ -115,7 +130,7 @@ async function main() {
           jobId,
           imageUrl,
           filterName,
-          filterParams: {},
+          filterParams: defaultParamsForFilter(filterName),
         }),
       });
       if (!res.ok) {

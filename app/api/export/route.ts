@@ -13,20 +13,44 @@ function originFromRequest(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
+interface ExportBody {
+  imagePath?: string;
+  preset?: string;
+  params?: Record<string, unknown>;
+  seed?: number;
+  overlayImagePath?: string | null;
+  overlayPreset?: string | null;
+  overlayParams?: Record<string, unknown> | null;
+  knockoutText?: string | null;
+  textSize?: number;
+  textPosition?: { x: number; y: number };
+  letterSpacing?: number;
+  fontWeight?: number;
+}
+
 export async function POST(req: NextRequest) {
-  let body: {
-    imagePath?: string;
-    preset?: string;
-    params?: Record<string, unknown>;
-    seed?: number;
-  };
+  let body: ExportBody;
   try {
-    body = await req.json();
+    body = (await req.json()) as ExportBody;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { imagePath, preset, params, seed } = body;
+  const {
+    imagePath,
+    preset,
+    params,
+    seed,
+    overlayImagePath,
+    overlayPreset,
+    overlayParams,
+    knockoutText,
+    textSize,
+    textPosition,
+    letterSpacing,
+    fontWeight,
+  } = body;
+
   if (!imagePath || typeof imagePath !== "string") {
     return NextResponse.json(
       { error: "imagePath is required" },
@@ -46,6 +70,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (overlayImagePath) {
+    if (
+      typeof overlayImagePath !== "string" ||
+      !overlayImagePath.startsWith("/uploads/")
+    ) {
+      return NextResponse.json(
+        { error: "overlayImagePath must be under /uploads/" },
+        { status: 400 },
+      );
+    }
+    if (!overlayPreset || !(overlayPreset in PRESETS_BY_ID)) {
+      return NextResponse.json(
+        { error: `Unknown overlayPreset: ${overlayPreset}` },
+        { status: 400 },
+      );
+    }
+  }
+
   try {
     const result = await renderToWebp({
       imagePath,
@@ -53,6 +95,14 @@ export async function POST(req: NextRequest) {
       params: params ?? {},
       seed: typeof seed === "number" ? seed : 1,
       origin: originFromRequest(req),
+      overlayImagePath: overlayImagePath ?? null,
+      overlayPreset: (overlayPreset ?? null) as PresetId | null,
+      overlayParams: overlayParams ?? null,
+      knockoutText: knockoutText ?? null,
+      textSize: typeof textSize === "number" ? textSize : 15,
+      textPosition: textPosition ?? { x: 50, y: 50 },
+      letterSpacing: typeof letterSpacing === "number" ? letterSpacing : 0,
+      fontWeight: typeof fontWeight === "number" ? fontWeight : 900,
     });
     return NextResponse.json({
       downloadUrl: result.downloadUrl,
