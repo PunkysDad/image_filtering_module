@@ -22,6 +22,7 @@ export interface ExportJob {
   textPosition?: { x: number; y: number };
   letterSpacing?: number;
   fontWeight?: number;
+  hslAdjustments?: Record<string, { hue: number; saturation: number; luminance: number }> | null;
 }
 
 export interface ExportResult {
@@ -73,6 +74,10 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     url.searchParams.set("preset", job.preset);
     url.searchParams.set("params", JSON.stringify(job.params ?? {}));
     url.searchParams.set("seed", String(job.seed ?? 1));
+
+    if (job.hslAdjustments) {
+      url.searchParams.set("hsl", JSON.stringify(job.hslAdjustments));
+    }
 
     if (job.overlayImagePath) {
       const absOverlay = new URL(job.overlayImagePath, job.origin).toString();

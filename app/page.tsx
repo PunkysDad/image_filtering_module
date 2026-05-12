@@ -18,6 +18,37 @@ import {
 
 type Params = Record<string, string | number | boolean>;
 
+type HslChannel = { hue: number; saturation: number; luminance: number };
+type HslState = {
+  reds: HslChannel;
+  oranges: HslChannel;
+  yellows: HslChannel;
+  greens: HslChannel;
+  cyans: HslChannel;
+  blues: HslChannel;
+  magentas: HslChannel;
+};
+
+const defaultHSL: HslState = {
+  reds:     { hue: 0, saturation: 0, luminance: 0 },
+  oranges:  { hue: 0, saturation: 0, luminance: 0 },
+  yellows:  { hue: 0, saturation: 0, luminance: 0 },
+  greens:   { hue: 0, saturation: 0, luminance: 0 },
+  cyans:    { hue: 0, saturation: 0, luminance: 0 },
+  blues:    { hue: 0, saturation: 0, luminance: 0 },
+  magentas: { hue: 0, saturation: 0, luminance: 0 },
+};
+
+const HSL_CHANNEL_DEFS = [
+  { key: "reds"     as keyof HslState, label: "Reds",     color: "#ff4040" },
+  { key: "oranges"  as keyof HslState, label: "Oranges",  color: "#ff9800" },
+  { key: "yellows"  as keyof HslState, label: "Yellows",  color: "#ffe500" },
+  { key: "greens"   as keyof HslState, label: "Greens",   color: "#44bb44" },
+  { key: "cyans"    as keyof HslState, label: "Cyans",    color: "#00ccdd" },
+  { key: "blues"    as keyof HslState, label: "Blues",    color: "#4488ff" },
+  { key: "magentas" as keyof HslState, label: "Magentas", color: "#ff44cc" },
+];
+
 function useDebouncedValue<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -49,6 +80,17 @@ export default function Dashboard() {
   const [letterSpacing, setLetterSpacing] = useState(0);
   const [textPosX, setTextPosX] = useState(50);
   const [textPosY, setTextPosY] = useState(50);
+
+  const [activeTab, setActiveTab] = useState<"layers" | "hsl">("layers");
+  const [hslAdjustments, setHslAdjustments] = useState<HslState>(() => ({
+    reds:     { hue: 0, saturation: 0, luminance: 0 },
+    oranges:  { hue: 0, saturation: 0, luminance: 0 },
+    yellows:  { hue: 0, saturation: 0, luminance: 0 },
+    greens:   { hue: 0, saturation: 0, luminance: 0 },
+    cyans:    { hue: 0, saturation: 0, luminance: 0 },
+    blues:    { hue: 0, saturation: 0, luminance: 0 },
+    magentas: { hue: 0, saturation: 0, luminance: 0 },
+  }));
 
   const [exporting, setExporting] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -95,6 +137,7 @@ export default function Dashboard() {
         textPosition: { x: textPosX, y: textPosY },
         letterSpacing,
         fontWeight,
+        hslAdjustments,
       },
       "*",
     );
@@ -111,6 +154,7 @@ export default function Dashboard() {
     textPosY,
     letterSpacing,
     fontWeight,
+    hslAdjustments,
   ]);
 
   useEffect(() => {
@@ -151,6 +195,29 @@ export default function Dashboard() {
     }
   };
 
+  const updateHslChannel = useCallback(
+    (channel: keyof HslState, prop: keyof HslChannel, value: number) => {
+      setHslAdjustments((prev) => ({
+        ...prev,
+        [channel]: { ...prev[channel], [prop]: value },
+      }));
+    },
+    [],
+  );
+
+  const resetHsl = useCallback(
+    () => setHslAdjustments({ ...defaultHSL,
+      reds:     { ...defaultHSL.reds },
+      oranges:  { ...defaultHSL.oranges },
+      yellows:  { ...defaultHSL.yellows },
+      greens:   { ...defaultHSL.greens },
+      cyans:    { ...defaultHSL.cyans },
+      blues:    { ...defaultHSL.blues },
+      magentas: { ...defaultHSL.magentas },
+    }),
+    [],
+  );
+
   const removeOverlay = () => {
     setOverlayPath(null);
     setKnockoutText("");
@@ -178,6 +245,7 @@ export default function Dashboard() {
           textPosition: { x: textPosX, y: textPosY },
           letterSpacing,
           fontWeight,
+          hslAdjustments,
         }),
       });
       if (!res.ok) {
@@ -228,16 +296,54 @@ export default function Dashboard() {
           )}
         </Section>
 
-        <FilterPanel
-          presetId={basePresetId}
-          onPresetChange={(id) => {
-            setBasePresetId(id);
-            setBaseParams(defaultParams(PRESETS_BY_ID[id]) as Params);
-            setDownloadUrl(null);
-          }}
-          params={baseParams}
-          setParams={setBaseParams}
-        />
+        {/* TAB SWITCHER */}
+        <div className="flex bg-ink-700 rounded-md p-0.5 mb-5 gap-0.5">
+          <button
+            type="button"
+            onClick={() => setActiveTab("layers")}
+            className={[
+              "flex-1 text-xs py-1.5 rounded transition",
+              activeTab === "layers"
+                ? "bg-ink-500 text-ink-100 font-medium"
+                : "text-ink-400 hover:text-ink-100",
+            ].join(" ")}
+          >
+            Layers
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("hsl")}
+            className={[
+              "flex-1 text-xs py-1.5 rounded transition",
+              activeTab === "hsl"
+                ? "bg-ink-500 text-ink-100 font-medium"
+                : "text-ink-400 hover:text-ink-100",
+            ].join(" ")}
+          >
+            HSL
+          </button>
+        </div>
+
+        {activeTab === "layers" && (
+          <FilterPanel
+            presetId={basePresetId}
+            onPresetChange={(id) => {
+              setBasePresetId(id);
+              setBaseParams(defaultParams(PRESETS_BY_ID[id]) as Params);
+              setDownloadUrl(null);
+            }}
+            params={baseParams}
+            setParams={setBaseParams}
+          />
+        )}
+
+        {activeTab === "hsl" && (
+          <HslPanel
+            hsl={hslAdjustments}
+            onUpdate={updateHslChannel}
+            onReset={resetHsl}
+          />
+        )}
 
         <LayerHeader>Overlay Image</LayerHeader>
 
@@ -531,6 +637,154 @@ function Slider({
         className="w-full"
       />
     </label>
+  );
+}
+
+// ---------- HSL panel ----------
+
+function HslPanel({
+  hsl,
+  onUpdate,
+  onReset,
+}: {
+  hsl: HslState;
+  onUpdate: (channel: keyof HslState, prop: keyof HslChannel, value: number) => void;
+  onReset: () => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  const toggleChannel = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  return (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[11px] uppercase tracking-wider text-ink-300">
+          HSL / Color
+        </h2>
+        <button
+          type="button"
+          onClick={onReset}
+          className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+        >
+          Reset All
+        </button>
+      </div>
+      <div className="space-y-1">
+        {HSL_CHANNEL_DEFS.map(({ key, label, color }) => {
+          const adj = hsl[key];
+          const isActive =
+            adj.hue !== 0 || adj.saturation !== 0 || adj.luminance !== 0;
+          const isExpanded = expanded.has(key);
+          return (
+            <div
+              key={key}
+              className="rounded-md border border-ink-600 overflow-hidden"
+            >
+              <button
+                type="button"
+                onClick={() => toggleChannel(key)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-ink-700/50 transition"
+              >
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ background: color }}
+                />
+                <span className="flex-1 text-xs text-ink-100">{label}</span>
+                {isActive && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent-400 shrink-0" />
+                )}
+                <ChevronIcon open={isExpanded} />
+              </button>
+              {isExpanded && (
+                <div className="px-3 pb-3 pt-2 space-y-3 border-t border-ink-600 bg-ink-700/20">
+                  <HslSlider
+                    label="Hue"
+                    min={-180}
+                    max={180}
+                    value={adj.hue}
+                    onChange={(v) => onUpdate(key, "hue", v)}
+                  />
+                  <HslSlider
+                    label="Saturation"
+                    min={-100}
+                    max={100}
+                    value={adj.saturation}
+                    onChange={(v) => onUpdate(key, "saturation", v)}
+                  />
+                  <HslSlider
+                    label="Luminance"
+                    min={-100}
+                    max={100}
+                    value={adj.luminance}
+                    onChange={(v) => onUpdate(key, "luminance", v)}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function HslSlider({
+  label,
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const formatted = value > 0 ? `+${value}` : String(value);
+  return (
+    <label className="block">
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-xs text-ink-300">{label}</span>
+        <span className="text-[11px] text-ink-400 tabular-nums">{formatted}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+      />
+    </label>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-ink-500 shrink-0 transition-transform"
+      style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
+      aria-hidden="true"
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
   );
 }
 

@@ -703,6 +703,7 @@ void main() {
                   }
                 : null,
               applyKnockoutText,
+              hslAdjustments: cfg.hslAdjustments || null,
             });
             if (myToken !== renderToken) return;
 
@@ -746,6 +747,7 @@ void main() {
               typeof data.letterSpacing === "number" ? data.letterSpacing : 0,
             fontWeight:
               typeof data.fontWeight === "number" ? data.fontWeight : 900,
+            hslAdjustments: data.hslAdjustments || null,
           };
         }
 
@@ -796,6 +798,7 @@ void main() {
             fontWeight: q.get("fontWeight")
               ? parseFloat(q.get("fontWeight"))
               : undefined,
+            hslAdjustments: parseJson(q.get("hsl"), null),
           });
         }
 
