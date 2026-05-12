@@ -683,8 +683,7 @@ void main() {
               img: baseImg,
               svgDefs,
               canvas,
-              preset: cfg.preset,
-              params: cfg.params || {},
+              layers: cfg.layers || [],
               seed: typeof cfg.seed === "number" ? cfg.seed : 1,
               overlay: overlayWanted
                 ? {
@@ -733,9 +732,8 @@ void main() {
         function normalizeRenderPayload(data) {
           return {
             imageUrl: data.imageUrl,
-            preset: data.preset,
-            params: data.params,
-            seed: data.seed,
+            layers: Array.isArray(data.layers) ? data.layers : [],
+            seed: typeof data.seed === "number" ? data.seed : 1,
             overlayImageUrl: data.overlayImageUrl || null,
             overlayPreset: data.overlayPreset || null,
             overlayParams: data.overlayParams || null,
@@ -755,7 +753,7 @@ void main() {
           if (data.type !== "render") return;
           console.log("[render.html] render message received", {
             imageUrl: data.imageUrl,
-            preset: data.preset,
+            layers: Array.isArray(data.layers) ? data.layers.length : 0,
             hasOverlay: !!data.overlayImageUrl,
             hasKnockout: !!(data.knockoutText && String(data.knockoutText).trim()),
           });
@@ -766,8 +764,8 @@ void main() {
         function parseUrlParams() {
           const q = new URLSearchParams(location.search);
           const imageUrl = q.get("image");
-          const preset = q.get("preset");
-          if (!imageUrl || !preset) return null;
+          const layersStr = q.get("layers");
+          if (!imageUrl || !layersStr) return null;
           const parseJson = (s, fallback) => {
             if (!s) return fallback;
             try {
@@ -776,11 +774,12 @@ void main() {
               return fallback;
             }
           };
+          const layers = parseJson(layersStr, []);
+          if (!Array.isArray(layers) || layers.length === 0) return null;
           const seedStr = q.get("seed");
           return normalizeRenderPayload({
             imageUrl,
-            preset,
-            params: parseJson(q.get("params"), {}),
+            layers,
             seed: seedStr ? parseInt(seedStr, 10) : 1,
             overlayImageUrl: q.get("overlayImage") || null,
             overlayPreset: q.get("overlayPreset") || null,

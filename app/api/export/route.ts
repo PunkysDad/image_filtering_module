@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { renderToWebp } from "@/lib/renderer";
+import { renderToWebp, LayerDef } from "@/lib/renderer";
 import { PRESETS_BY_ID, PresetId } from "@/lib/filters";
 
 export const runtime = "nodejs";
@@ -13,10 +13,16 @@ function originFromRequest(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
+interface LayerBody {
+  preset: string;
+  visible?: boolean;
+  intensity?: number;
+  params?: Record<string, unknown>;
+}
+
 interface ExportBody {
   imagePath?: string;
-  preset?: string;
-  params?: Record<string, unknown>;
+  layers?: LayerBody[];
   seed?: number;
   overlayImagePath?: string | null;
   overlayPreset?: string | null;
@@ -38,8 +44,7 @@ export async function POST(req: NextRequest) {
 
   const {
     imagePath,
-    preset,
-    params,
+    layers,
     seed,
     overlayImagePath,
     overlayPreset,
@@ -63,11 +68,20 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  if (!preset || !(preset in PRESETS_BY_ID)) {
+
+  if (!Array.isArray(layers) || layers.length === 0) {
     return NextResponse.json(
-      { error: `Unknown preset: ${preset}` },
+      { error: "layers array is required and must not be empty" },
       { status: 400 },
     );
+  }
+  for (const layer of layers) {
+    if (!layer.preset || !(layer.preset in PRESETS_BY_ID)) {
+      return NextResponse.json(
+        { error: `Unknown preset: ${layer.preset}` },
+        { status: 400 },
+      );
+    }
   }
 
   if (overlayImagePath) {
@@ -88,11 +102,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const normalizedLayers: LayerDef[] = layers.map((l) => ({
+    preset: l.preset,
+    visible: l.visible !== false,
+    intensity: typeof l.intensity === "number" ? l.intensity : 100,
+    params: l.params ?? {},
+  }));
+
   try {
     const result = await renderToWebp({
       imagePath,
-      preset: preset as PresetId,
-      params: params ?? {},
+      layers: normalizedLayers,
       seed: typeof seed === "number" ? seed : 1,
       origin: originFromRequest(req),
       overlayImagePath: overlayImagePath ?? null,

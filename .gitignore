@@ -10,3 +10,6 @@ uploads/*
 !uploads/.gitkeep
 exports/*
 !exports/.gitkeep
+
+render-worker/output/
+tsconfig.tsbuildinfo

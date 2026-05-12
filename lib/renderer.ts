@@ -6,10 +6,16 @@ import { v4 as uuidv4 } from "uuid";
 
 const EXPORTS_DIR = path.join(process.cwd(), "exports");
 
+export interface LayerDef {
+  preset: string;
+  visible: boolean;
+  intensity: number;
+  params: Record<string, unknown>;
+}
+
 export interface ExportJob {
   imagePath: string; // public path like "/uploads/<uuid>.jpg"
-  preset: string;
-  params: Record<string, unknown>;
+  layers: LayerDef[];
   seed?: number;
   origin: string; // e.g. "http://localhost:3000"
 
@@ -70,8 +76,7 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     const absImageUrl = new URL(job.imagePath, job.origin).toString();
     const url = new URL("/render.html", job.origin);
     url.searchParams.set("image", absImageUrl);
-    url.searchParams.set("preset", job.preset);
-    url.searchParams.set("params", JSON.stringify(job.params ?? {}));
+    url.searchParams.set("layers", JSON.stringify(job.layers));
     url.searchParams.set("seed", String(job.seed ?? 1));
 
     if (job.overlayImagePath) {
@@ -135,9 +140,12 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     const base64 = dataUrl.split(",")[1];
     if (!base64) throw new Error("Canvas produced empty data URL");
     const pngBuffer = Buffer.from(base64, "base64");
+    const layerSummary = job.layers
+      .map((l) => `${l.preset}${l.visible ? "" : "(hidden)"}`)
+      .join("+");
     console.log(
       `[renderer] captured PNG ${pngBuffer.byteLength} bytes ` +
-        `(${canvasSize.width}x${canvasSize.height}, preset=${job.preset})`,
+        `(${canvasSize.width}x${canvasSize.height}, layers=[${layerSummary}])`,
     );
     if (pngBuffer.byteLength < 10_000) {
       console.warn(

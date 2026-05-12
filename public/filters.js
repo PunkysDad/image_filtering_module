@@ -1046,9 +1046,8 @@
     );
   }
 
-  // Renders a single layer (source image + preset) onto targetCanvas. Handles
-  // LUT and Canvas 2D paths, plus per-layer WebGL post-processing. Shared by
-  // the base + overlay layers in renderScene.
+  // Renders a single layer onto targetCanvas. sourceImg may be an
+  // HTMLImageElement or an HTMLCanvasElement (output of a previous layer).
   async function renderLayer({
     sourceImg,
     svgDefs,
@@ -1060,11 +1059,14 @@
   }) {
     const def = PRESETS[preset];
     if (!def) throw new Error(`Unknown preset: ${preset}`);
-    if (!sourceImg.complete || sourceImg.naturalWidth === 0) {
-      await new Promise((resolve, reject) => {
-        sourceImg.addEventListener("load", resolve, { once: true });
-        sourceImg.addEventListener("error", reject, { once: true });
-      });
+    // Only wait for network load when sourceImg is a real Image element.
+    if (sourceImg instanceof HTMLImageElement) {
+      if (!sourceImg.complete || sourceImg.naturalWidth === 0) {
+        await new Promise((resolve, reject) => {
+          sourceImg.addEventListener("load", resolve, { once: true });
+          sourceImg.addEventListener("error", reject, { once: true });
+        });
+      }
     }
 
     const w = targetCanvas.width;
@@ -1110,18 +1112,20 @@
   }
 
   // ---------- Orchestrator ----------
-  // Renders the (optionally two-layer) scene into `canvas`. Pipeline:
-  //   1. Render base layer onto an offscreen canvas (full per-layer pipeline).
-  //   2. If overlay is provided, render it onto a second offscreen canvas.
-  //   3. If knockout text is provided, punch it out of the overlay canvas
-  //      (destination-out) before compositing.
-  //   4. Composite: drawImage(base), then drawImage(overlay) on top.
+  // Renders a layer stack sequentially into `canvas`. Pipeline:
+  //   1. Start with source image on a work canvas.
+  //   2. For each visible layer: apply preset, then blend back the pre-effect
+  //      snapshot at (1 - intensity/100) opacity to implement layer intensity.
+  //   3. If overlay is provided, render it onto a second offscreen canvas.
+  //   4. If knockout text is provided, punch it out of the overlay canvas.
+  //   5. Composite: workCanvas result, then overlay on top.
+  //
+  // `layers` is an array of { preset, params, visible, intensity } objects.
   async function renderScene({
     img,
     svgDefs,
     canvas,
-    preset,
-    params,
+    layers,
     seed,
     overlay,
     knockout,
@@ -1140,31 +1144,65 @@
     canvas.height = h;
     svgDefs.innerHTML = ""; // Fresh per render.
 
-    const baseCanvas = document.createElement("canvas");
-    baseCanvas.width = w;
-    baseCanvas.height = h;
-    await renderLayer({
-      sourceImg: img,
-      svgDefs,
-      filterDefId: `imgFilter_base_${preset}`,
-      targetCanvas: baseCanvas,
-      preset,
-      params,
-      seed,
-    });
+    // Accumulator canvas — starts as the raw source image.
+    const workCanvas = makeCanvas(w, h);
+    workCanvas.getContext("2d").drawImage(img, 0, 0, w, h);
 
+    // Process each visible layer sequentially.
+    const allLayers = Array.isArray(layers) ? layers : [];
+    let layerIndex = 0;
+    for (const layer of allLayers) {
+      if (layer.visible === false) continue;
+
+      const intensity = typeof layer.intensity === "number" ? layer.intensity : 100;
+
+      // Snapshot workCanvas before this layer (needed for intensity blend).
+      let snapshotCanvas = null;
+      if (intensity < 100) {
+        snapshotCanvas = makeCanvas(w, h);
+        snapshotCanvas.getContext("2d").drawImage(workCanvas, 0, 0);
+      }
+
+      // Render this layer using the current workCanvas as source.
+      const effectCanvas = makeCanvas(w, h);
+      await renderLayer({
+        sourceImg: workCanvas,
+        svgDefs,
+        filterDefId: `imgFilter_layer_${layerIndex}_${layer.preset}`,
+        targetCanvas: effectCanvas,
+        preset: layer.preset,
+        params: layer.params || {},
+        seed,
+      });
+
+      // Copy effect result back to workCanvas.
+      const workCtx = workCanvas.getContext("2d");
+      workCtx.clearRect(0, 0, w, h);
+      workCtx.drawImage(effectCanvas, 0, 0);
+
+      // Blend the pre-effect snapshot back at (1 - intensity/100) opacity.
+      // At intensity=100 nothing is blended back (full effect visible).
+      // At intensity=0 the snapshot fully overrides (layer has no visible effect).
+      if (snapshotCanvas !== null) {
+        workCtx.globalAlpha = 1 - intensity / 100;
+        workCtx.drawImage(snapshotCanvas, 0, 0);
+        workCtx.globalAlpha = 1;
+      }
+
+      layerIndex++;
+    }
+
+    // Overlay image (independent of the layer stack — applied on top).
     let overlayCanvas = null;
     if (overlay && overlay.img) {
-      overlayCanvas = document.createElement("canvas");
-      overlayCanvas.width = w;
-      overlayCanvas.height = h;
+      overlayCanvas = makeCanvas(w, h);
       await renderLayer({
         sourceImg: overlay.img,
         svgDefs,
         filterDefId: `imgFilter_overlay_${overlay.preset}`,
         targetCanvas: overlayCanvas,
         preset: overlay.preset,
-        params: overlay.params,
+        params: overlay.params || {},
         seed,
       });
 
@@ -1173,9 +1211,10 @@
       }
     }
 
+    // Final composite.
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(baseCanvas, 0, 0);
+    ctx.drawImage(workCanvas, 0, 0);
     if (overlayCanvas) ctx.drawImage(overlayCanvas, 0, 0);
   }
 
