@@ -1,0 +1,16 @@
+{
+  "name": "render-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Persistent Chromium render service for the image filter platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "stress": "node stress-test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "1.47.0",
+    "sharp": "^0.33.5"
+  }
+}
