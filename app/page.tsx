@@ -814,47 +814,50 @@ function LayerCard({
         </button>
 
         {/* Preset name */}
-        <span className="flex-1 text-xs text-ink-100 truncate min-w-0">
+        <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">
           {preset.name}
         </span>
 
-        {/* PRO badge */}
-        {preset.pro && (
-          <span className="shrink-0 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-            PRO
-          </span>
-        )}
+        {/* Right-side actions — always visible, never compressed */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* PRO badge */}
+          {preset.pro && (
+            <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
+              PRO
+            </span>
+          )}
 
-        {/* Mask toggle */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMaskOpen((v) => !v);
-          }}
-          className={[
-            "shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
-            maskOpen || isMaskActive(layer.mask)
-              ? "border-accent-500 text-accent-400 bg-accent-500/10"
-              : "border-ink-600 text-ink-500 hover:text-ink-300 hover:border-ink-400",
-          ].join(" ")}
-          aria-label="Toggle mask panel"
-        >
-          MASK
-        </button>
+          {/* Mask toggle */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMaskOpen((v) => !v);
+            }}
+            className={[
+              "text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
+              maskOpen || isMaskActive(layer.mask)
+                ? "border-accent-500 text-accent-400 bg-accent-500/10"
+                : "border-ink-600 text-ink-500 hover:text-ink-300 hover:border-ink-400",
+            ].join(" ")}
+            aria-label="Toggle mask panel"
+          >
+            MASK
+          </button>
 
-        {/* Remove */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="shrink-0 text-ink-500 hover:text-red-400 transition-colors"
-          aria-label="Remove layer"
-        >
-          <TrashIcon />
-        </button>
+          {/* Remove */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="text-ink-500 hover:text-red-400 transition-colors"
+            aria-label="Remove layer"
+          >
+            <TrashIcon />
+          </button>
+        </div>
       </div>
 
       {/* Intensity slider */}
