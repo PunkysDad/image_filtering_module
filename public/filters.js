@@ -82,10 +82,22 @@
     { key: "magentas", center: 300, sigma: 30 },
   ];
 
-  function _hslChanWeight(hue, center, sigma) {
-    let d = Math.abs(hue - center) % 360;
-    if (d > 180) d = 360 - d;
-    return Math.exp(-(d * d) / (2 * sigma * sigma));
+  // Shared Gaussian channel weight for a single named channel.
+  // expansion 0–100: 50 = standard channel width, 0 = very narrow, 100 = ~1.8× wider.
+  // smoothness 0–100: 50 = plain Gaussian, 100 = softer falloff, 0 = sharper cutoff.
+  function getChannelWeight(hue, channelKey, expansion, smoothness) {
+    for (let i = 0; i < HSL_CHANNELS.length; i++) {
+      const ch = HSL_CHANNELS[i];
+      if (ch.key !== channelKey) continue;
+      let d = Math.abs(hue - ch.center) % 360;
+      if (d > 180) d = 360 - d;
+      const effSigma = ch.sigma * (0.2 + 1.6 * (expansion / 100));
+      if (effSigma < 1e-6) return d < 0.5 ? 1 : 0;
+      const raw = Math.exp(-(d * d) / (2 * effSigma * effSigma));
+      const pow = 0.5 + (100 - smoothness) / 100; // 0→1.5, 50→1.0, 100→0.5
+      return Math.pow(raw, pow);
+    }
+    return 0;
   }
 
   // Global HSL pass: per-channel H/S/L adjustments applied after all filter
@@ -112,7 +124,7 @@
 
       let totalW = 0;
       for (let ci = 0; ci < HSL_CHANNELS.length; ci++) {
-        const wt = _hslChanWeight(pixHue, HSL_CHANNELS[ci].center, HSL_CHANNELS[ci].sigma);
+        const wt = getChannelWeight(pixHue, HSL_CHANNELS[ci].key, 50, 50);
         wBuf[ci] = wt;
         totalW += wt;
       }
@@ -138,6 +150,84 @@
     }
 
     ctx.putImageData(img, 0, 0);
+  }
+
+  // Per-layer mask: blends original pixels with effected pixels per-pixel.
+  // sourceCanvas = pre-effect canvas; targetCanvas = post-effect canvas (modified in place).
+  function applyMask(sourceCanvas, targetCanvas, mask) {
+    if (!mask) return;
+    const lumCfg = mask.luminosity;
+    const colCfg = mask.colorRange;
+    const lumActive = lumCfg && lumCfg.enabled;
+    const colActive = colCfg && colCfg.enabled && colCfg.channel;
+    if (!lumActive && !colActive) return;
+
+    const w = targetCanvas.width;
+    const h = targetCanvas.height;
+
+    // Get original pixels (source).
+    let origData;
+    if (typeof sourceCanvas.getContext === "function") {
+      origData = sourceCanvas.getContext("2d").getImageData(0, 0, w, h);
+    } else {
+      const tmp = makeCanvas(w, h);
+      tmp.getContext("2d").drawImage(sourceCanvas, 0, 0, w, h);
+      origData = tmp.getContext("2d").getImageData(0, 0, w, h);
+    }
+
+    const effCtx = targetCanvas.getContext("2d");
+    const effData = effCtx.getImageData(0, 0, w, h);
+    const od = origData.data;
+    const ed = effData.data;
+
+    for (let i = 0; i < od.length; i += 4) {
+      const oR = od[i], oG = od[i + 1], oB = od[i + 2], oA = od[i + 3];
+      let lumWeight = 1.0;
+      let colorWeight = 1.0;
+
+      if (lumActive) {
+        const L = oR * 0.299 + oG * 0.587 + oB * 0.114;
+        const mn = lumCfg.min;
+        const mx = lumCfg.max;
+        const feather = (lumCfg.smoothness / 100) * 64;
+        if (feather < 0.5) {
+          lumWeight = (L >= mn && L <= mx) ? 1.0 : 0.0;
+        } else if (L <= mn - feather) {
+          lumWeight = 0;
+        } else if (L <= mn) {
+          const t = (L - (mn - feather)) / feather;
+          lumWeight = t * t * (3 - 2 * t);
+        } else if (L <= mx) {
+          lumWeight = 1;
+        } else if (L <= mx + feather) {
+          const t = (L - mx) / feather;
+          lumWeight = 1 - t * t * (3 - 2 * t);
+        } else {
+          lumWeight = 0;
+        }
+        if (lumCfg.invert) lumWeight = 1 - lumWeight;
+      }
+
+      if (colActive) {
+        const hsl = rgbToHsl(oR, oG, oB);
+        const pixSat = hsl[1];
+        if (pixSat < 0.01) {
+          colorWeight = 0;
+        } else {
+          colorWeight = getChannelWeight(hsl[0], colCfg.channel, colCfg.expansion, colCfg.smoothness);
+        }
+        if (colCfg.invert) colorWeight = 1 - colorWeight;
+      }
+
+      const t = lumWeight * colorWeight;
+      if (t >= 0.9999) continue; // fast path: full effect, no blend needed
+      ed[i]     = Math.round(oR + (ed[i]     - oR) * t);
+      ed[i + 1] = Math.round(oG + (ed[i + 1] - oG) * t);
+      ed[i + 2] = Math.round(oB + (ed[i + 2] - oB) * t);
+      ed[i + 3] = Math.round(oA + (ed[i + 3] - oA) * t);
+    }
+
+    effCtx.putImageData(effData, 0, 0);
   }
 
   function rampTable(from, to) {
@@ -1164,6 +1254,7 @@
     preset,
     params,
     seed,
+    mask,
   }) {
     const def = PRESETS[preset];
     if (!def) throw new Error(`Unknown preset: ${preset}`);
@@ -1217,6 +1308,9 @@
         }
       }
     }
+
+    // Per-layer mask: blend original source pixels with effected pixels.
+    if (mask) applyMask(sourceImg, targetCanvas, mask);
   }
 
   // ---------- Orchestrator ----------
@@ -1282,6 +1376,7 @@
         preset: layer.preset,
         params: layer.params || {},
         seed,
+        mask: layer.mask || null,
       });
 
       // Copy effect result back to workCanvas.
