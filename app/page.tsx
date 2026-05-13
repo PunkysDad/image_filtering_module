@@ -55,6 +55,33 @@ const MASK_CHANNEL_DEFS: { key: MaskChannel; label: string; color: string }[] = 
   { key: "magentas", label: "M", color: "#ff44cc" },
 ];
 
+type CurvePoint = [number, number]; // [input 0–255, output 0–255]
+type Curve = CurvePoint[];
+type CurveChannel = "rgb" | "r" | "g" | "b";
+
+type LayerCurves = {
+  rgb: Curve;
+  r:   Curve;
+  g:   Curve;
+  b:   Curve;
+};
+
+function defaultLayerCurves(): LayerCurves {
+  return {
+    rgb: [[0, 0], [255, 255]],
+    r:   [[0, 0], [255, 255]],
+    g:   [[0, 0], [255, 255]],
+    b:   [[0, 0], [255, 255]],
+  };
+}
+
+const CURVE_CHANNEL_DEFS: { key: CurveChannel; label: string; color: string }[] = [
+  { key: "rgb", label: "RGB", color: "#ffffff" },
+  { key: "r",   label: "R",   color: "#ff6b6b" },
+  { key: "g",   label: "G",   color: "#6bff8a" },
+  { key: "b",   label: "B",   color: "#6b9fff" },
+];
+
 export type FilterLayer = {
   id: string;
   preset: PresetId;
@@ -62,6 +89,7 @@ export type FilterLayer = {
   visible: boolean;
   intensity: number; // 0–100
   mask: LayerMask;
+  curves: LayerCurves;
 };
 
 type LayerAction =
@@ -70,7 +98,8 @@ type LayerAction =
   | { type: "set-params"; id: string; params: Params }
   | { type: "toggle-visible"; id: string }
   | { type: "set-intensity"; id: string; intensity: number }
-  | { type: "set-mask"; id: string; mask: LayerMask }
+  | { type: "set-mask";   id: string; mask: LayerMask }
+  | { type: "set-curves"; id: string; curves: LayerCurves }
   | { type: "reorder"; from: number; to: number };
 
 function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[] {
@@ -85,7 +114,8 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
           params: defaultParams(PRESETS_BY_ID[action.preset]) as Params,
           visible: true,
           intensity: 100,
-          mask: defaultMask(),
+          mask:   defaultMask(),
+          curves: defaultLayerCurves(),
         },
       ];
     }
@@ -106,6 +136,10 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
     case "set-mask":
       return state.map((l) =>
         l.id === action.id ? { ...l, mask: action.mask } : l,
+      );
+    case "set-curves":
+      return state.map((l) =>
+        l.id === action.id ? { ...l, curves: action.curves } : l,
       );
     case "reorder": {
       const next = [...state];
@@ -175,7 +209,8 @@ export default function Dashboard() {
       params: defaultParams(PRESETS_BY_ID[INITIAL_PRESET_ID]) as Params,
       visible: true,
       intensity: 100,
-      mask: defaultMask(),
+      mask:   defaultMask(),
+      curves: defaultLayerCurves(),
     },
   ]);
   const [activeLayerId, setActiveLayerId] = useState<string>(INITIAL_LAYER_ID);
@@ -194,7 +229,7 @@ export default function Dashboard() {
   const [textPosX, setTextPosX] = useState(50);
   const [textPosY, setTextPosY] = useState(50);
 
-  const [activeTab, setActiveTab] = useState<"layers" | "hsl">("layers");
+  const [activeTab, setActiveTab] = useState<"layers" | "hsl" | "curves">("layers");
   const [hslAdjustments, setHslAdjustments] = useState<HslState>(() => ({
     reds:     { hue: 0, saturation: 0, luminance: 0 },
     oranges:  { hue: 0, saturation: 0, luminance: 0 },
@@ -254,7 +289,8 @@ export default function Dashboard() {
           visible: l.visible,
           intensity: l.intensity,
           params: l.params,
-          mask: l.mask,
+          mask:   l.mask,
+          curves: l.curves,
         })),
         seed: 1,
         overlayImageUrl: overlayPath,
@@ -366,7 +402,8 @@ export default function Dashboard() {
             visible: l.visible,
             intensity: l.intensity,
             params: l.params,
-            mask: l.mask,
+            mask:   l.mask,
+            curves: l.curves,
           })),
           seed: 1,
           overlayImagePath: overlayPath,
@@ -437,30 +474,21 @@ export default function Dashboard() {
 
         {/* TAB SWITCHER */}
         <div className="flex bg-ink-700 rounded-md p-0.5 mb-5 gap-0.5">
-          <button
-            type="button"
-            onClick={() => setActiveTab("layers")}
-            className={[
-              "flex-1 text-xs py-1.5 rounded transition",
-              activeTab === "layers"
-                ? "bg-ink-500 text-ink-100 font-medium"
-                : "text-ink-400 hover:text-ink-100",
-            ].join(" ")}
-          >
-            Layers
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("hsl")}
-            className={[
-              "flex-1 text-xs py-1.5 rounded transition",
-              activeTab === "hsl"
-                ? "bg-ink-500 text-ink-100 font-medium"
-                : "text-ink-400 hover:text-ink-100",
-            ].join(" ")}
-          >
-            HSL
-          </button>
+          {(["layers", "hsl", "curves"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={[
+                "flex-1 text-xs py-1.5 rounded transition capitalize",
+                activeTab === tab
+                  ? "bg-ink-500 text-ink-100 font-medium"
+                  : "text-ink-400 hover:text-ink-100",
+              ].join(" ")}
+            >
+              {tab === "hsl" ? "HSL" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
         </div>
 
         {activeTab === "layers" && (
@@ -510,6 +538,22 @@ export default function Dashboard() {
             onUpdate={updateHslChannel}
             onReset={resetHsl}
           />
+        )}
+
+        {activeTab === "curves" && (
+          activeLayer ? (
+            <CurvesPanel
+              key={activeLayer.id}
+              curves={activeLayer.curves}
+              onUpdate={(curves) =>
+                dispatch({ type: "set-curves", id: activeLayer.id, curves })
+              }
+            />
+          ) : (
+            <p className="text-xs text-ink-400 text-center py-6">
+              Select a layer to edit its curves.
+            </p>
+          )
         )}
 
         <LayerHeader>Overlay Image</LayerHeader>
@@ -1432,6 +1476,274 @@ function Slider({
         className="w-full"
       />
     </label>
+  );
+}
+
+// ---------- Curves panel ----------
+
+function drawCurveCanvas(
+  canvas: HTMLCanvasElement,
+  points: CurvePoint[],
+  color: string,
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const SZ = 256;
+
+  // Background
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(0, 0, SZ, SZ);
+
+  // 4×4 grid
+  ctx.strokeStyle = "#333333";
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i < 4; i++) {
+    const v = (i / 4) * SZ;
+    ctx.beginPath(); ctx.moveTo(v, 0);  ctx.lineTo(v, SZ); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, v);  ctx.lineTo(SZ, v); ctx.stroke();
+  }
+
+  // Diagonal baseline (dashed)
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "#444444";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, SZ);
+  ctx.lineTo(SZ, 0);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (points.length < 2) {
+    if (points.length === 1) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(points[0][0], SZ - 1 - points[0][1], 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    return;
+  }
+
+  const sorted = points.slice().sort((a, b) => a[0] - b[0]);
+  const n  = sorted.length;
+  const xs = sorted.map((p) => p[0]);
+  const ys = sorted.map((p) => p[1]);
+
+  // Monotonic cubic spline tangents (Fritsch-Carlson)
+  const delta: number[] = [];
+  for (let k = 0; k < n - 1; k++) {
+    const dx = xs[k + 1] - xs[k];
+    delta.push(dx < 1e-10 ? 0 : (ys[k + 1] - ys[k]) / dx);
+  }
+  const m: number[] = new Array(n);
+  m[0] = delta[0];
+  m[n - 1] = delta[n - 2];
+  for (let k = 1; k < n - 1; k++) m[k] = (delta[k - 1] + delta[k]) / 2;
+  for (let k = 0; k < n - 1; k++) {
+    if (Math.abs(delta[k]) < 1e-10) {
+      m[k] = 0; m[k + 1] = 0;
+    } else {
+      const alpha = m[k] / delta[k];
+      const beta  = m[k + 1] / delta[k];
+      const s = alpha * alpha + beta * beta;
+      if (s > 9) {
+        const tau = 3 / Math.sqrt(s);
+        m[k]     = tau * alpha * delta[k];
+        m[k + 1] = tau * beta  * delta[k];
+      }
+    }
+  }
+
+  // y is flipped: canvas y = SZ - 1 - output
+  const cy = (v: number) => SZ - 1 - v;
+
+  // Draw curve via hermite→bezier conversion
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(xs[0], cy(ys[0]));
+  for (let k = 0; k < n - 1; k++) {
+    const h = xs[k + 1] - xs[k];
+    if (h < 1e-10) continue;
+    ctx.bezierCurveTo(
+      xs[k] + h / 3,     cy(ys[k] + m[k] * h / 3),
+      xs[k + 1] - h / 3, cy(ys[k + 1] - m[k + 1] * h / 3),
+      xs[k + 1],         cy(ys[k + 1]),
+    );
+  }
+  ctx.stroke();
+
+  // Control points
+  for (const [ix, iy] of sorted) {
+    ctx.beginPath();
+    ctx.arc(ix, cy(iy), 4, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#111111";
+    ctx.stroke();
+  }
+}
+
+function CurvesPanel({
+  curves,
+  onUpdate,
+}: {
+  curves: LayerCurves;
+  onUpdate: (c: LayerCurves) => void;
+}) {
+  const [activeCh, setActiveCh] = useState<CurveChannel>("rgb");
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const dragging   = useRef<number | null>(null);
+  // Keep a ref to the latest activePts so event handlers never see stale state.
+  const latestPts  = useRef<CurvePoint[]>(curves[activeCh]);
+
+  const activePts = curves[activeCh];
+  const chColor   = CURVE_CHANNEL_DEFS.find((d) => d.key === activeCh)!.color;
+
+  // Keep latestPts in sync on every render.
+  latestPts.current = activePts;
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (c) drawCurveCanvas(c, activePts, chColor);
+  }, [activePts, chColor]);
+
+  function setCurve(pts: CurvePoint[]) {
+    const sorted = pts.slice().sort((a, b) => a[0] - b[0]);
+    onUpdate({ ...curves, [activeCh]: sorted });
+  }
+
+  function toPoint(e: React.MouseEvent<HTMLCanvasElement>): CurvePoint {
+    const c = canvasRef.current!;
+    const r = c.getBoundingClientRect();
+    const input  = Math.max(0, Math.min(255, Math.round((e.clientX - r.left) * 256 / r.width)));
+    const output = Math.max(0, Math.min(255, 255 - Math.round((e.clientY - r.top) * 256 / r.height)));
+    return [input, output];
+  }
+
+  function hitTest(pt: CurvePoint): number {
+    const pts = latestPts.current;
+    const HIT = 14; // hit radius in curve space
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const dx = pt[0] - pts[i][0];
+      const dy = pt[1] - pts[i][1];
+      if (dx * dx + dy * dy < HIT * HIT) return i;
+    }
+    return -1;
+  }
+
+  function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const pt  = toPoint(e);
+    const idx = hitTest(pt);
+    if (idx >= 0) {
+      dragging.current = idx;
+      return;
+    }
+    const pts = latestPts.current;
+    if (pts.length >= 10) return;
+    // Add new point, then track its sorted index.
+    const next   = [...pts, pt];
+    const sorted = next.slice().sort((a, b) => a[0] - b[0]);
+    dragging.current = sorted.indexOf(pt);
+    onUpdate({ ...curves, [activeCh]: sorted });
+  }
+
+  function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (dragging.current === null) return;
+    e.preventDefault();
+    const idx = dragging.current;
+    const pts = latestPts.current;
+    if (idx >= pts.length) return;
+    const [nx, ny] = toPoint(e);
+    const orig      = pts[idx];
+    const isEndpt   = orig[0] === 0 || orig[0] === 255;
+    const clampedX  = isEndpt
+      ? orig[0]
+      : Math.max(
+          idx > 0 ? pts[idx - 1][0] + 1 : 1,
+          Math.min(idx < pts.length - 1 ? pts[idx + 1][0] - 1 : 254, nx),
+        );
+    const next = pts.map<CurvePoint>((p, i) => (i === idx ? [clampedX, ny] : p));
+    onUpdate({ ...curves, [activeCh]: next });
+  }
+
+  function handleMouseUp() {
+    dragging.current = null;
+  }
+
+  function handleRemove(e: React.MouseEvent<HTMLCanvasElement>) {
+    e.preventDefault();
+    const pt  = toPoint(e);
+    const idx = hitTest(pt);
+    if (idx < 0) return;
+    const pts = latestPts.current;
+    const p   = pts[idx];
+    if (p[0] === 0 || p[0] === 255) return; // endpoints are locked
+    setCurve(pts.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <section className="mb-6">
+      {/* Channel selector + reset buttons */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex gap-1">
+          {CURVE_CHANNEL_DEFS.map(({ key, label, color }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActiveCh(key)}
+              className={[
+                "text-[10px] font-medium px-2 py-0.5 rounded border transition",
+                activeCh === key
+                  ? "border-current"
+                  : "border-ink-600 text-ink-400 hover:text-ink-200",
+              ].join(" ")}
+              style={activeCh === key ? { color, borderColor: color } : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setCurve([[0, 0], [255, 255]])}
+            className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={() => onUpdate(defaultLayerCurves())}
+            className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+          >
+            Reset All
+          </button>
+        </div>
+      </div>
+
+      {/* Interactive curve canvas */}
+      <div className="w-full aspect-square rounded overflow-hidden border border-ink-600">
+        <canvas
+          ref={canvasRef}
+          width={256}
+          height={256}
+          className="w-full h-full block cursor-crosshair"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onContextMenu={handleRemove}
+          onDoubleClick={handleRemove}
+        />
+      </div>
+
+      <p className="text-[10px] text-ink-500 mt-1.5 leading-snug">
+        Click to add point · Drag to move · Right-click or double-click to remove
+      </p>
+    </section>
   );
 }
 

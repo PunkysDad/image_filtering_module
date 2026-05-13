@@ -230,6 +230,98 @@
     effCtx.putImageData(effData, 0, 0);
   }
 
+  // ---------- Per-layer curves ----------
+
+  // Monotonic cubic spline LUT (Fritsch-Carlson method).
+  // Returns Uint8Array[256] where LUT[i] = adjusted output for input i,
+  // or null when the curve is the identity [[0,0],[255,255]] (no-op).
+  function buildCurveLUT(points) {
+    if (!points || points.length < 2) return null;
+    if (points.length === 2 &&
+        points[0][0] === 0 && points[0][1] === 0 &&
+        points[1][0] === 255 && points[1][1] === 255) return null;
+
+    const pts = points.slice().sort(function(a, b) { return a[0] - b[0]; });
+    const n   = pts.length;
+    const xs  = new Float64Array(n);
+    const ys  = new Float64Array(n);
+    for (let i = 0; i < n; i++) { xs[i] = pts[i][0]; ys[i] = pts[i][1]; }
+
+    const delta = new Float64Array(n - 1);
+    for (let k = 0; k < n - 1; k++) {
+      const dx = xs[k + 1] - xs[k];
+      delta[k] = dx < 1e-10 ? 0 : (ys[k + 1] - ys[k]) / dx;
+    }
+
+    const m = new Float64Array(n);
+    m[0] = delta[0];
+    m[n - 1] = delta[n - 2];
+    for (let k = 1; k < n - 1; k++) m[k] = (delta[k - 1] + delta[k]) / 2;
+    for (let k = 0; k < n - 1; k++) {
+      if (Math.abs(delta[k]) < 1e-10) {
+        m[k] = 0; m[k + 1] = 0;
+      } else {
+        const alpha = m[k] / delta[k];
+        const beta  = m[k + 1] / delta[k];
+        const s = alpha * alpha + beta * beta;
+        if (s > 9) {
+          const tau = 3 / Math.sqrt(s);
+          m[k]     = tau * alpha * delta[k];
+          m[k + 1] = tau * beta  * delta[k];
+        }
+      }
+    }
+
+    const lut = new Uint8Array(256);
+    for (let i = 0; i <= 255; i++) {
+      let y;
+      if (i <= xs[0]) {
+        y = ys[0] + m[0] * (i - xs[0]);
+      } else if (i >= xs[n - 1]) {
+        y = ys[n - 1] + m[n - 1] * (i - xs[n - 1]);
+      } else {
+        let k = 0;
+        while (k < n - 2 && xs[k + 1] <= i) k++;
+        const h = xs[k + 1] - xs[k];
+        if (h < 1e-10) {
+          y = ys[k + 1];
+        } else {
+          const t = (i - xs[k]) / h;
+          const t2 = t * t, t3 = t2 * t;
+          y = (2*t3 - 3*t2 + 1) * ys[k]
+            + (t3 - 2*t2 + t)   * h * m[k]
+            + (-2*t3 + 3*t2)    * ys[k + 1]
+            + (t3 - t2)         * h * m[k + 1];
+        }
+      }
+      lut[i] = Math.max(0, Math.min(255, Math.round(y)));
+    }
+    return lut;
+  }
+
+  // Apply per-layer curves: master RGB first, then per-channel R/G/B.
+  function applyCurves(canvas, curves) {
+    if (!curves) return;
+    const rgbLUT = buildCurveLUT(curves.rgb);
+    const rLUT   = buildCurveLUT(curves.r);
+    const gLUT   = buildCurveLUT(curves.g);
+    const bLUT   = buildCurveLUT(curves.b);
+    if (!rgbLUT && !rLUT && !gLUT && !bLUT) return;
+
+    const ctx  = canvas.getContext("2d");
+    const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = img.data;
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i], g = data[i + 1], b = data[i + 2];
+      if (rgbLUT) { r = rgbLUT[r]; g = rgbLUT[g]; b = rgbLUT[b]; }
+      if (rLUT) r = rLUT[r];
+      if (gLUT) g = gLUT[g];
+      if (bLUT) b = bLUT[b];
+      data[i] = r; data[i + 1] = g; data[i + 2] = b;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
   function rampTable(from, to) {
     return `${from.toFixed(4)} ${to.toFixed(4)}`;
   }
@@ -1255,6 +1347,7 @@
     params,
     seed,
     mask,
+    curves,
   }) {
     const def = PRESETS[preset];
     if (!def) throw new Error(`Unknown preset: ${preset}`);
@@ -1311,6 +1404,9 @@
 
     // Per-layer mask: blend original source pixels with effected pixels.
     if (mask) applyMask(sourceImg, targetCanvas, mask);
+
+    // Per-layer curves: last per-layer adjustment before result passes on.
+    if (curves) applyCurves(targetCanvas, curves);
   }
 
   // ---------- Orchestrator ----------
@@ -1376,7 +1472,8 @@
         preset: layer.preset,
         params: layer.params || {},
         seed,
-        mask: layer.mask || null,
+        mask:   layer.mask   || null,
+        curves: layer.curves || null,
       });
 
       // Copy effect result back to workCanvas.
