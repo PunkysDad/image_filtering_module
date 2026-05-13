@@ -32,6 +32,114 @@
       ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)]
       : [0, 0, 0];
   }
+
+  // ---------- RGB ↔ HSL (precise) ----------
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h;
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+    return [h * 360, s, l];
+  }
+
+  function _hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  }
+
+  function hslToRgb(h, s, l) {
+    h /= 360;
+    if (s === 0) return [l * 255, l * 255, l * 255];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    return [
+      _hue2rgb(p, q, h + 1 / 3) * 255,
+      _hue2rgb(p, q, h) * 255,
+      _hue2rgb(p, q, h - 1 / 3) * 255,
+    ];
+  }
+
+  // ---------- HSL channel editor ----------
+  // Channel centers and Gaussian sigmas (degrees). Sigma ~ half the distance
+  // to adjacent channel so boundaries blend smoothly without hard hue artifacts.
+  const HSL_CHANNELS = [
+    { key: "reds",     center: 0,   sigma: 10 },
+    { key: "oranges",  center: 30,  sigma: 10 },
+    { key: "yellows",  center: 60,  sigma: 10 },
+    { key: "greens",   center: 120, sigma: 30 },
+    { key: "cyans",    center: 180, sigma: 10 },
+    { key: "blues",    center: 225, sigma: 20 },
+    { key: "magentas", center: 300, sigma: 30 },
+  ];
+
+  function _hslChanWeight(hue, center, sigma) {
+    let d = Math.abs(hue - center) % 360;
+    if (d > 180) d = 360 - d;
+    return Math.exp(-(d * d) / (2 * sigma * sigma));
+  }
+
+  // Global HSL pass: per-channel H/S/L adjustments applied after all filter
+  // layers. Gaussian partition-of-unity blending prevents hard boundary edges.
+  function applyHSLAdjustments(canvas, hslState) {
+    if (!hslState) return;
+    const channelKeys = ["reds", "oranges", "yellows", "greens", "cyans", "blues", "magentas"];
+    const allZero = channelKeys.every((k) => {
+      const ch = hslState[k];
+      return !ch || (ch.hue === 0 && ch.saturation === 0 && ch.luminance === 0);
+    });
+    if (allZero) return;
+
+    const ctx = canvas.getContext("2d");
+    const iw = canvas.width;
+    const ih = canvas.height;
+    const img = ctx.getImageData(0, 0, iw, ih);
+    const data = img.data;
+    const wBuf = new Float64Array(HSL_CHANNELS.length);
+
+    for (let i = 0; i < data.length; i += 4) {
+      const [pixHue, pixSat, pixLum] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
+      if (pixSat < 0.01) continue; // near-achromatic pixels have no meaningful hue
+
+      let totalW = 0;
+      for (let ci = 0; ci < HSL_CHANNELS.length; ci++) {
+        const wt = _hslChanWeight(pixHue, HSL_CHANNELS[ci].center, HSL_CHANNELS[ci].sigma);
+        wBuf[ci] = wt;
+        totalW += wt;
+      }
+      if (totalW < 1e-10) continue;
+
+      let dHue = 0, dSat = 0, dLum = 0;
+      for (let ci = 0; ci < HSL_CHANNELS.length; ci++) {
+        const adj = hslState[HSL_CHANNELS[ci].key];
+        if (!adj) continue;
+        const w = wBuf[ci] / totalW;
+        dHue += w * adj.hue;
+        dSat += w * adj.saturation;
+        dLum += w * adj.luminance;
+      }
+
+      const newHue = ((pixHue + dHue) % 360 + 360) % 360;
+      const newSat = Math.max(0, Math.min(1, pixSat + dSat / 100));
+      const newLum = Math.max(0, Math.min(1, pixLum + dLum / 100));
+      const [nr, ng, nb] = hslToRgb(newHue, newSat, newLum);
+      data[i]     = Math.max(0, Math.min(255, Math.round(nr)));
+      data[i + 1] = Math.max(0, Math.min(255, Math.round(ng)));
+      data[i + 2] = Math.max(0, Math.min(255, Math.round(nb)));
+    }
+
+    ctx.putImageData(img, 0, 0);
+  }
+
   function rampTable(from, to) {
     return `${from.toFixed(4)} ${to.toFixed(4)}`;
   }
@@ -1130,6 +1238,7 @@
     overlay,
     knockout,
     applyKnockoutText,
+    hslAdjustments,
   }) {
     if (!img.complete || img.naturalWidth === 0) {
       await new Promise((resolve, reject) => {
@@ -1192,7 +1301,9 @@
       layerIndex++;
     }
 
-    // Overlay image (independent of the layer stack — applied on top).
+    // Global HSL pass: runs after all filter layers, before overlay composite.
+    if (hslAdjustments) applyHSLAdjustments(workCanvas, hslAdjustments);
+
     let overlayCanvas = null;
     if (overlay && overlay.img) {
       overlayCanvas = makeCanvas(w, h);

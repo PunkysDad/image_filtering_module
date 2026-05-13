@@ -32,6 +32,7 @@ interface ExportBody {
   textPosition?: { x: number; y: number };
   letterSpacing?: number;
   fontWeight?: number;
+  hslAdjustments?: Record<string, { hue: number; saturation: number; luminance: number }> | null;
 }
 
 export async function POST(req: NextRequest) {
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
     textPosition,
     letterSpacing,
     fontWeight,
+    hslAdjustments,
   } = body;
 
   if (!imagePath || typeof imagePath !== "string") {
@@ -123,6 +125,7 @@ export async function POST(req: NextRequest) {
       textPosition: textPosition ?? { x: 50, y: 50 },
       letterSpacing: typeof letterSpacing === "number" ? letterSpacing : 0,
       fontWeight: typeof fontWeight === "number" ? fontWeight : 900,
+      hslAdjustments: hslAdjustments ?? null,
     });
     return NextResponse.json({
       downloadUrl: result.downloadUrl,
