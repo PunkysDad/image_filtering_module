@@ -19,12 +19,49 @@ import {
 
 type Params = Record<string, string | number | boolean>;
 
+type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
+
+type LayerMask = {
+  luminosity: {
+    enabled: boolean;
+    min: number;
+    max: number;
+    smoothness: number;
+    invert: boolean;
+  };
+  colorRange: {
+    enabled: boolean;
+    channel: MaskChannel | null;
+    expansion: number;
+    smoothness: number;
+    invert: boolean;
+  };
+};
+
+function defaultMask(): LayerMask {
+  return {
+    luminosity: { enabled: false, min: 0, max: 255, smoothness: 50, invert: false },
+    colorRange:  { enabled: false, channel: null, expansion: 50, smoothness: 50, invert: false },
+  };
+}
+
+const MASK_CHANNEL_DEFS: { key: MaskChannel; label: string; color: string }[] = [
+  { key: "reds",     label: "R", color: "#ff4040" },
+  { key: "oranges",  label: "O", color: "#ff9800" },
+  { key: "yellows",  label: "Y", color: "#ffe500" },
+  { key: "greens",   label: "G", color: "#44bb44" },
+  { key: "cyans",    label: "C", color: "#00ccdd" },
+  { key: "blues",    label: "B", color: "#4488ff" },
+  { key: "magentas", label: "M", color: "#ff44cc" },
+];
+
 export type FilterLayer = {
   id: string;
   preset: PresetId;
   params: Params;
   visible: boolean;
   intensity: number; // 0–100
+  mask: LayerMask;
 };
 
 type LayerAction =
@@ -33,6 +70,7 @@ type LayerAction =
   | { type: "set-params"; id: string; params: Params }
   | { type: "toggle-visible"; id: string }
   | { type: "set-intensity"; id: string; intensity: number }
+  | { type: "set-mask"; id: string; mask: LayerMask }
   | { type: "reorder"; from: number; to: number };
 
 function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[] {
@@ -47,6 +85,7 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
           params: defaultParams(PRESETS_BY_ID[action.preset]) as Params,
           visible: true,
           intensity: 100,
+          mask: defaultMask(),
         },
       ];
     }
@@ -63,6 +102,10 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
     case "set-intensity":
       return state.map((l) =>
         l.id === action.id ? { ...l, intensity: action.intensity } : l,
+      );
+    case "set-mask":
+      return state.map((l) =>
+        l.id === action.id ? { ...l, mask: action.mask } : l,
       );
     case "reorder": {
       const next = [...state];
@@ -132,6 +175,7 @@ export default function Dashboard() {
       params: defaultParams(PRESETS_BY_ID[INITIAL_PRESET_ID]) as Params,
       visible: true,
       intensity: 100,
+      mask: defaultMask(),
     },
   ]);
   const [activeLayerId, setActiveLayerId] = useState<string>(INITIAL_LAYER_ID);
@@ -210,6 +254,7 @@ export default function Dashboard() {
           visible: l.visible,
           intensity: l.intensity,
           params: l.params,
+          mask: l.mask,
         })),
         seed: 1,
         overlayImageUrl: overlayPath,
@@ -321,6 +366,7 @@ export default function Dashboard() {
             visible: l.visible,
             intensity: l.intensity,
             params: l.params,
+            mask: l.mask,
           })),
           seed: 1,
           overlayImagePath: overlayPath,
@@ -429,6 +475,7 @@ export default function Dashboard() {
                 onSetIntensity={(id, intensity) =>
                   dispatch({ type: "set-intensity", id, intensity })
                 }
+                onSetMask={(id, mask) => dispatch({ type: "set-mask", id, mask })}
                 onReorder={(from, to) => dispatch({ type: "reorder", from, to })}
                 dragSrcIdx={dragSrcIdx}
               />
@@ -632,6 +679,7 @@ function LayerStack({
   onRemove,
   onToggleVisible,
   onSetIntensity,
+  onSetMask,
   onReorder,
   dragSrcIdx,
 }: {
@@ -641,6 +689,7 @@ function LayerStack({
   onRemove: (id: string) => void;
   onToggleVisible: (id: string) => void;
   onSetIntensity: (id: string, intensity: number) => void;
+  onSetMask: (id: string, mask: LayerMask) => void;
   onReorder: (from: number, to: number) => void;
   dragSrcIdx: React.MutableRefObject<number | null>;
 }) {
@@ -663,11 +712,19 @@ function LayerStack({
           onRemove={() => onRemove(layer.id)}
           onToggleVisible={() => onToggleVisible(layer.id)}
           onSetIntensity={(v) => onSetIntensity(layer.id, v)}
+          onSetMask={(mask) => onSetMask(layer.id, mask)}
           dragSrcIdx={dragSrcIdx}
           onReorder={onReorder}
         />
       ))}
     </div>
+  );
+}
+
+function isMaskActive(mask: LayerMask): boolean {
+  return (
+    mask.luminosity.enabled ||
+    (mask.colorRange.enabled && mask.colorRange.channel !== null)
   );
 }
 
@@ -679,6 +736,7 @@ function LayerCard({
   onRemove,
   onToggleVisible,
   onSetIntensity,
+  onSetMask,
   dragSrcIdx,
   onReorder,
 }: {
@@ -689,10 +747,12 @@ function LayerCard({
   onRemove: () => void;
   onToggleVisible: () => void;
   onSetIntensity: (v: number) => void;
+  onSetMask: (mask: LayerMask) => void;
   dragSrcIdx: React.MutableRefObject<number | null>;
   onReorder: (from: number, to: number) => void;
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
+  const [maskOpen, setMaskOpen] = useState(false);
   const preset = PRESETS_BY_ID[layer.preset];
 
   return (
@@ -754,29 +814,50 @@ function LayerCard({
         </button>
 
         {/* Preset name */}
-        <span className="flex-1 text-xs text-ink-100 truncate min-w-0">
+        <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">
           {preset.name}
         </span>
 
-        {/* PRO badge */}
-        {preset.pro && (
-          <span className="shrink-0 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-            PRO
-          </span>
-        )}
+        {/* Right-side actions — always visible, never compressed */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* PRO badge */}
+          {preset.pro && (
+            <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
+              PRO
+            </span>
+          )}
 
-        {/* Remove */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="shrink-0 text-ink-500 hover:text-red-400 transition-colors"
-          aria-label="Remove layer"
-        >
-          <TrashIcon />
-        </button>
+          {/* Mask toggle */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMaskOpen((v) => !v);
+            }}
+            className={[
+              "text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
+              maskOpen || isMaskActive(layer.mask)
+                ? "border-accent-500 text-accent-400 bg-accent-500/10"
+                : "border-ink-600 text-ink-500 hover:text-ink-300 hover:border-ink-400",
+            ].join(" ")}
+            aria-label="Toggle mask panel"
+          >
+            MASK
+          </button>
+
+          {/* Remove */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="text-ink-500 hover:text-red-400 transition-colors"
+            aria-label="Remove layer"
+          >
+            <TrashIcon />
+          </button>
+        </div>
       </div>
 
       {/* Intensity slider */}
@@ -797,6 +878,290 @@ function LayerCard({
         <span className="text-[10px] text-ink-400 tabular-nums w-6 text-right shrink-0">
           {layer.intensity}
         </span>
+      </div>
+
+      {/* Inline mask panel */}
+      {maskOpen && (
+        <MaskPanel
+          mask={layer.mask}
+          onUpdate={onSetMask}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------- Mask Panel ----------
+
+function ToggleSwitch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+      className={[
+        "relative shrink-0 w-7 h-4 rounded-full transition-colors",
+        checked ? "bg-accent-500" : "bg-ink-600",
+      ].join(" ")}
+    >
+      <span
+        className={[
+          "absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
+          checked ? "translate-x-3.5" : "translate-x-0.5",
+        ].join(" ")}
+      />
+    </button>
+  );
+}
+
+function DualRangeSlider({
+  min,
+  max,
+  low,
+  high,
+  onChangeLow,
+  onChangeHigh,
+}: {
+  min: number;
+  max: number;
+  low: number;
+  high: number;
+  onChangeLow: (v: number) => void;
+  onChangeHigh: (v: number) => void;
+}) {
+  return (
+    <div className="relative h-5">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={low}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          onChangeLow(Math.min(v, high - 1));
+        }}
+        className="absolute w-full pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-moz-range-thumb]:pointer-events-auto"
+        style={{ zIndex: 2 }}
+      />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={high}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          onChangeHigh(Math.max(v, low + 1));
+        }}
+        className="absolute w-full pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-moz-range-thumb]:pointer-events-auto"
+        style={{ zIndex: 3 }}
+      />
+    </div>
+  );
+}
+
+function MaskPanel({
+  mask,
+  onUpdate,
+}: {
+  mask: LayerMask;
+  onUpdate: (mask: LayerMask) => void;
+}) {
+  const [lumOpen, setLumOpen] = useState(mask.luminosity.enabled);
+  const [colorOpen, setColorOpen] = useState(mask.colorRange.enabled);
+
+  const setLum = (patch: Partial<LayerMask["luminosity"]>) =>
+    onUpdate({ ...mask, luminosity: { ...mask.luminosity, ...patch } });
+
+  const setColor = (patch: Partial<LayerMask["colorRange"]>) =>
+    onUpdate({ ...mask, colorRange: { ...mask.colorRange, ...patch } });
+
+  return (
+    <div
+      className="mt-2 pt-2 border-t border-ink-600 space-y-1"
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {/* Luminosity subsection */}
+      <div className="rounded border border-ink-600 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setLumOpen((v) => !v)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-ink-700/50 transition"
+        >
+          <span className="flex-1 text-[11px] text-ink-200">Luminosity</span>
+          <ToggleSwitch
+            checked={mask.luminosity.enabled}
+            onChange={(enabled) => {
+              setLum({ enabled });
+              if (enabled) setLumOpen(true);
+            }}
+          />
+          <ChevronIcon open={lumOpen} />
+        </button>
+        {lumOpen && (
+          <div
+            className={[
+              "px-2 pb-2 pt-1 space-y-2 border-t border-ink-600 bg-ink-700/20",
+              !mask.luminosity.enabled ? "opacity-40 pointer-events-none" : "",
+            ].join(" ")}
+          >
+            <div>
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-[10px] text-ink-300">Range</span>
+                <span className="text-[10px] text-ink-400 tabular-nums">
+                  {mask.luminosity.min}–{mask.luminosity.max}
+                </span>
+              </div>
+              <DualRangeSlider
+                min={0}
+                max={255}
+                low={mask.luminosity.min}
+                high={mask.luminosity.max}
+                onChangeLow={(min) => setLum({ min })}
+                onChangeHigh={(max) => setLum({ max })}
+              />
+            </div>
+            <label className="block">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-[10px] text-ink-300">Smoothness</span>
+                <span className="text-[10px] text-ink-400 tabular-nums">
+                  {mask.luminosity.smoothness}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={mask.luminosity.smoothness}
+                onChange={(e) => setLum({ smoothness: Number(e.target.value) })}
+                className="w-full"
+              />
+            </label>
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-[10px] text-ink-300">Invert</span>
+              <input
+                type="checkbox"
+                checked={mask.luminosity.invert}
+                onChange={(e) => setLum({ invert: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* Color Range subsection */}
+      <div className="rounded border border-ink-600 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setColorOpen((v) => !v)}
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-ink-700/50 transition"
+        >
+          <span className="flex-1 text-[11px] text-ink-200">Color Range</span>
+          <ToggleSwitch
+            checked={mask.colorRange.enabled}
+            onChange={(enabled) => {
+              setColor({ enabled });
+              if (enabled) setColorOpen(true);
+            }}
+          />
+          <ChevronIcon open={colorOpen} />
+        </button>
+        {colorOpen && (
+          <div
+            className={[
+              "px-2 pb-2 pt-1 space-y-2 border-t border-ink-600 bg-ink-700/20",
+              !mask.colorRange.enabled ? "opacity-40 pointer-events-none" : "",
+            ].join(" ")}
+          >
+            <div>
+              <span className="text-[10px] text-ink-300 block mb-1.5">
+                Channel
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {MASK_CHANNEL_DEFS.map(({ key, label, color }) => {
+                  const active = mask.colorRange.channel === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setColor({ channel: key })}
+                      className={[
+                        "text-[10px] w-6 h-6 rounded-full border transition font-medium",
+                        active
+                          ? "border-current"
+                          : "border-ink-600 text-ink-400 hover:text-ink-200 hover:border-ink-400",
+                      ].join(" ")}
+                      style={active ? { color, borderColor: color } : undefined}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <label className="block">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-[10px] text-ink-300">Expansion</span>
+                <span className="text-[10px] text-ink-400 tabular-nums">
+                  {mask.colorRange.expansion}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={mask.colorRange.expansion}
+                onChange={(e) => setColor({ expansion: Number(e.target.value) })}
+                className="w-full"
+              />
+            </label>
+            <label className="block">
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-[10px] text-ink-300">Smoothness</span>
+                <span className="text-[10px] text-ink-400 tabular-nums">
+                  {mask.colorRange.smoothness}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={mask.colorRange.smoothness}
+                onChange={(e) => setColor({ smoothness: Number(e.target.value) })}
+                className="w-full"
+              />
+            </label>
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-[10px] text-ink-300">Invert</span>
+              <input
+                type="checkbox"
+                checked={mask.colorRange.invert}
+                onChange={(e) => setColor({ invert: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
+              />
+            </label>
+          </div>
+        )}
       </div>
     </div>
   );
