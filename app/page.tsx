@@ -16,10 +16,31 @@ import {
   PresetId,
   defaultParams,
 } from "@/lib/filters";
+import AiTutor from "@/components/AiTutor";
 
 type Params = Record<string, string | number | boolean>;
 
 type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
+
+type MaskChannelSettings = {
+  expansion: number;  // 0–100
+  smoothness: number; // 0–100
+  invert: boolean;
+};
+
+const DEFAULT_CHANNEL_SETTINGS: MaskChannelSettings = { expansion: 50, smoothness: 50, invert: false };
+
+function defaultChannels(): Record<MaskChannel, MaskChannelSettings> {
+  return {
+    reds:     { ...DEFAULT_CHANNEL_SETTINGS },
+    oranges:  { ...DEFAULT_CHANNEL_SETTINGS },
+    yellows:  { ...DEFAULT_CHANNEL_SETTINGS },
+    greens:   { ...DEFAULT_CHANNEL_SETTINGS },
+    cyans:    { ...DEFAULT_CHANNEL_SETTINGS },
+    blues:    { ...DEFAULT_CHANNEL_SETTINGS },
+    magentas: { ...DEFAULT_CHANNEL_SETTINGS },
+  };
+}
 
 type LayerMask = {
   luminosity: {
@@ -31,17 +52,16 @@ type LayerMask = {
   };
   colorRange: {
     enabled: boolean;
-    channel: MaskChannel | null;
-    expansion: number;
-    smoothness: number;
-    invert: boolean;
+    activeChannels: MaskChannel[];      // channels participating in the render
+    focusedChannel: MaskChannel | null; // UI-only: which channel's sliders are shown
+    channels: Record<MaskChannel, MaskChannelSettings>;
   };
 };
 
 function defaultMask(): LayerMask {
   return {
     luminosity: { enabled: false, min: 0, max: 255, smoothness: 50, invert: false },
-    colorRange:  { enabled: false, channel: null, expansion: 50, smoothness: 50, invert: false },
+    colorRange:  { enabled: false, activeChannels: [], focusedChannel: null, channels: defaultChannels() },
   };
 }
 
@@ -737,6 +757,10 @@ export default function Dashboard() {
           onSelect={addLayer}
         />
       )}
+
+      {/* AI TUTOR — fixed floating chat button + drawer */}
+      {/* TODO: Replace isPremium with real subscription data when payments are implemented. */}
+      <AiTutor layers={layers} hslAdjustments={hslAdjustments} isPremium={true} />
     </main>
   );
 }
@@ -795,7 +819,7 @@ function LayerStack({
 function isMaskActive(mask: LayerMask): boolean {
   return (
     mask.luminosity.enabled ||
-    (mask.colorRange.enabled && mask.colorRange.channel !== null)
+    (mask.colorRange.enabled && mask.colorRange.activeChannels.length > 0)
   );
 }
 
@@ -1062,6 +1086,31 @@ function MaskPanel({
   const setColor = (patch: Partial<LayerMask["colorRange"]>) =>
     onUpdate({ ...mask, colorRange: { ...mask.colorRange, ...patch } });
 
+  const setChannelSetting = (patch: Partial<MaskChannelSettings>) => {
+    const ch = mask.colorRange.focusedChannel;
+    if (!ch) return;
+    const existing = mask.colorRange.channels ?? defaultChannels();
+    onUpdate({
+      ...mask,
+      colorRange: {
+        ...mask.colorRange,
+        channels: { ...existing, [ch]: { ...existing[ch], ...patch } },
+      },
+    });
+  };
+
+  // Backwards compat: old state had a single `channel` field.
+  const cr = mask.colorRange;
+  const activeChannels: MaskChannel[] =
+    cr.activeChannels ?? ((cr as any).channel ? [(cr as any).channel as MaskChannel] : []);
+  const focusedCh: MaskChannel | null =
+    cr.focusedChannel !== undefined
+      ? cr.focusedChannel
+      : ((cr as any).channel as MaskChannel | null) ?? null;
+  const chSettings = focusedCh
+    ? (cr.channels ?? defaultChannels())[focusedCh]
+    : null;
+
   return (
     <div
       className="mt-2 pt-2 border-t border-ink-600 space-y-1"
@@ -1164,73 +1213,107 @@ function MaskPanel({
           >
             <div>
               <span className="text-[10px] text-ink-300 block mb-1.5">
-                Channel
+                Channels
               </span>
               <div className="flex flex-wrap gap-1">
                 {MASK_CHANNEL_DEFS.map(({ key, label, color }) => {
-                  const active = mask.colorRange.channel === key;
+                  const isActive = activeChannels.includes(key);
                   return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setColor({ channel: key })}
-                      className={[
-                        "text-[10px] w-6 h-6 rounded-full border transition font-medium",
-                        active
-                          ? "border-current"
-                          : "border-ink-600 text-ink-200 hover:text-ink-200 hover:border-ink-400",
-                      ].join(" ")}
-                      style={active ? { color, borderColor: color } : undefined}
-                    >
-                      {label}
-                    </button>
+                    <div key={key} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isActive) {
+                            setColor({ activeChannels: [...activeChannels, key], focusedChannel: key });
+                          } else {
+                            setColor({ focusedChannel: key });
+                          }
+                        }}
+                        className={[
+                          "text-[10px] w-6 h-6 rounded-full border transition font-medium",
+                          isActive
+                            ? "border-current"
+                            : "border-ink-600 text-ink-200 hover:text-ink-200 hover:border-ink-400",
+                        ].join(" ")}
+                        style={isActive ? { color, borderColor: color } : undefined}
+                      >
+                        {label}
+                      </button>
+                      {isActive && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newActive = activeChannels.filter((k) => k !== key);
+                            const newFocused =
+                              focusedCh === key ? (newActive[0] ?? null) : focusedCh;
+                            setColor({ activeChannels: newActive, focusedChannel: newFocused });
+                          }}
+                          className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-ink-500 hover:bg-ink-400 text-ink-100 flex items-center justify-center text-[8px] leading-none"
+                          aria-label={`Remove ${key}`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
             </div>
-            <label className="block">
-              <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Expansion</span>
-                <span className="text-[10px] text-ink-200 tabular-nums">
-                  {mask.colorRange.expansion}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={mask.colorRange.expansion}
-                onChange={(e) => setColor({ expansion: Number(e.target.value) })}
-                className="w-full"
-              />
-            </label>
-            <label className="block">
-              <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Smoothness</span>
-                <span className="text-[10px] text-ink-200 tabular-nums">
-                  {mask.colorRange.smoothness}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={mask.colorRange.smoothness}
-                onChange={(e) => setColor({ smoothness: Number(e.target.value) })}
-                className="w-full"
-              />
-            </label>
-            <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-[10px] text-ink-300">Invert</span>
-              <input
-                type="checkbox"
-                checked={mask.colorRange.invert}
-                onChange={(e) => setColor({ invert: e.target.checked })}
-                className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
-              />
-            </label>
+            {chSettings === null ? (
+              <p className="text-[10px] text-ink-400 text-center py-1">
+                Select a channel to adjust its settings.
+              </p>
+            ) : (
+              <>
+                <p className="text-[10px] font-medium text-ink-200">
+                  {focusedCh!.charAt(0).toUpperCase() + focusedCh!.slice(1)}
+                </p>
+                <label className="block">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-[10px] text-ink-300">Expansion</span>
+                    <span className="text-[10px] text-ink-200 tabular-nums">
+                      {chSettings.expansion}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={chSettings.expansion}
+                    onChange={(e) => setChannelSetting({ expansion: Number(e.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="block">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-[10px] text-ink-300">Smoothness</span>
+                    <span className="text-[10px] text-ink-200 tabular-nums">
+                      {chSettings.smoothness}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={chSettings.smoothness}
+                    onChange={(e) => setChannelSetting({ smoothness: Number(e.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[10px] text-ink-300">Invert</span>
+                  <input
+                    type="checkbox"
+                    checked={chSettings.invert}
+                    onChange={(e) => setChannelSetting({ invert: e.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
+                  />
+                </label>
+              </>
+            )}
           </div>
         )}
       </div>

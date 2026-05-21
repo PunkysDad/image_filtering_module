@@ -159,8 +159,31 @@
     const lumCfg = mask.luminosity;
     const colCfg = mask.colorRange;
     const lumActive = lumCfg && lumCfg.enabled;
-    const colActive = colCfg && colCfg.enabled && colCfg.channel;
-    if (!lumActive && !colActive) return;
+
+    // Normalize activeChannels: handles Array, Set (duck-typed), or old single-channel shape.
+    function resolveActiveChannels(cfg) {
+      if (!cfg || !cfg.enabled) return [];
+      const ac = cfg.activeChannels;
+      if (Array.isArray(ac)) return ac;
+      if (ac && typeof ac.forEach === "function") {
+        // Set duck-typing (arrives via structured clone through postMessage).
+        const arr = [];
+        ac.forEach(function(v) { arr.push(v); });
+        return arr;
+      }
+      // Backwards compat: old shape had a single `channel` field.
+      if (cfg.channel) return [cfg.channel];
+      return [];
+    }
+
+    const activeChannels = resolveActiveChannels(colCfg);
+    const hasColorMask = activeChannels.length > 0;
+    if (!lumActive && !hasColorMask) return;
+
+    // Pre-resolve per-channel settings once; avoids repeated property access in the pixel loop.
+    const colChSettingsArr = activeChannels.map(function(key) {
+      return (colCfg.channels && colCfg.channels[key]) || { expansion: 50, smoothness: 50, invert: false };
+    });
 
     const w = targetCanvas.width;
     const h = targetCanvas.height;
@@ -208,15 +231,22 @@
         if (lumCfg.invert) lumWeight = 1 - lumWeight;
       }
 
-      if (colActive) {
+      if (hasColorMask) {
         const hsl = rgbToHsl(oR, oG, oB);
         const pixSat = hsl[1];
         if (pixSat < 0.01) {
           colorWeight = 0;
         } else {
-          colorWeight = getChannelWeight(hsl[0], colCfg.channel, colCfg.expansion, colCfg.smoothness);
+          // Union: combinedWeight = 1 - product(1 - wi) across all active channels.
+          let product = 1;
+          for (let ci = 0; ci < activeChannels.length; ci++) {
+            const cs = colChSettingsArr[ci];
+            let w = getChannelWeight(hsl[0], activeChannels[ci], cs.expansion, cs.smoothness);
+            if (cs.invert) w = 1 - w;
+            product *= (1 - w);
+          }
+          colorWeight = 1 - product;
         }
-        if (colCfg.invert) colorWeight = 1 - colorWeight;
       }
 
       const t = lumWeight * colorWeight;
@@ -859,6 +889,15 @@
   // uploads as a 256×128 2D atlas (8 z-slices per row, 4 rows).
 
   const LUT_SIZE = 32;
+
+  const SPLIT_TONE_PAIRS = {
+    "teal-orange":   { shadowHue: 185, highlightHue: 30  },
+    "blue-gold":     { shadowHue: 220, highlightHue: 45  },
+    "green-magenta": { shadowHue: 140, highlightHue: 320 },
+    "cyan-red":      { shadowHue: 195, highlightHue: 0   },
+    "purple-yellow": { shadowHue: 280, highlightHue: 60  },
+  };
+
   const _clampUnit = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   function _luma(r, g, b) {
     return 0.299 * r + 0.587 * g + 0.114 * b;
@@ -937,18 +976,6 @@
     return [r, g, b];
   }
 
-  // Teal Orange Pro — strong teal in lows, strong orange in highs.
-  function lutTealOrangePro(r, g, b) {
-    const l = _luma(r, g, b);
-    const shad = Math.max(0, 1 - l * 1.5);
-    const high = Math.max(0, l * 1.5 - 0.5);
-    r += -shad * 0.15 + high * 0.20;
-    g += shad * 0.02 + high * 0.05;
-    b += shad * 0.15 - high * 0.25;
-    [r, g, b] = _sat(r, g, b, 1.05);
-    return [r, g, b];
-  }
-
   // Fuji 3510 — cool slightly green mids, lifted shadows, soft highlight roll-off,
   // slight magenta in deep shadows.
   function lutFuji3510(r, g, b) {
@@ -1011,6 +1038,56 @@
   function cachedLut(key, transform) {
     if (!_lutCache[key]) _lutCache[key] = buildLut(transform);
     return _lutCache[key];
+  }
+
+  // Split Tone Pro — genuine 3D transform: output depends on both luma and hue.
+  const _splitToneLutCache = Object.create(null);
+
+  function splitToneCore(r, g, b, shadowHue, highlightHue, strength) {
+    const hsl = rgbToHsl(r * 255, g * 255, b * 255);
+    const H = hsl[0];
+    const S = hsl[1];
+    const L = hsl[2];
+
+    // Smoothstep-weighted zones: shadow peaks at L=0, highlight peaks at L=1.
+    const rawShad = _clampUnit(1 - L * 2);
+    const rawHigh = _clampUnit(L * 2 - 1);
+    const shadowWeight    = rawShad * rawShad * (3 - 2 * rawShad);
+    const highlightWeight = rawHigh * rawHigh * (3 - 2 * rawHigh);
+
+    // Hue affinity: pixels whose hue is already near the target get pushed harder.
+    // Achromatic pixels use a neutral affinity (moderate push regardless of hue).
+    let affinityShadow, affinityHighlight;
+    if (S < 0.05) {
+      affinityShadow = 0.5;
+      affinityHighlight = 0.5;
+    } else {
+      let dShad = Math.abs(H - shadowHue) % 360;
+      if (dShad > 180) dShad = 360 - dShad;
+      affinityShadow = (Math.cos(dShad * Math.PI / 180) + 1) / 2;
+
+      let dHigh = Math.abs(H - highlightHue) % 360;
+      if (dHigh > 180) dHigh = 360 - dHigh;
+      affinityHighlight = (Math.cos(dHigh * Math.PI / 180) + 1) / 2;
+    }
+
+    const shadowPush    = shadowWeight    * (0.5 + affinityShadow    * 0.5) * strength;
+    const highlightPush = highlightWeight * (0.5 + affinityHighlight * 0.5) * strength;
+
+    // Interpolate hue toward target via shortest angular path.
+    let newH = H;
+    if (shadowPush > 0) {
+      const diff = ((shadowHue - newH) % 360 + 540) % 360 - 180;
+      newH = ((newH + diff * shadowPush) % 360 + 360) % 360;
+    }
+    if (highlightPush > 0) {
+      const diff = ((highlightHue - newH) % 360 + 540) % 360 - 180;
+      newH = ((newH + diff * highlightPush) % 360 + 360) % 360;
+    }
+
+    const newS = Math.min(1, S + (shadowPush + highlightPush) * 0.3);
+    const rgb = hslToRgb(newH, newS, L);
+    return [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
   }
 
   // ---------- Presets ----------
@@ -1178,12 +1255,7 @@
             0 0 ${I.toFixed(3)} 0 ${((1 - I) * 0.5).toFixed(3)}
             0 0 0 1 0"/>`;
       },
-      drawOverlay(ctx, p, info) {
-        const { width: w, height: h, seed } = info;
-        drawRegistrationOffset(ctx, w, h, seed);
-        drawLumaCoupledGrain(ctx, w, h, 0.4, "fine", seed);
-        drawVignette(ctx, w, h, 0.3, 0.6);
-      },
+      drawOverlay(_ctx, _p, _info) {},
     },
 
     "studio-lighting": {
@@ -1236,11 +1308,21 @@
         return cachedLut("bleach-bypass", lutBleachBypass);
       },
     },
-    "lut-teal-orange-pro": {
+    "split-tone-pro": {
       type: "lut",
       webgl: true,
-      generateLUT() {
-        return cachedLut("teal-orange-pro", lutTealOrangePro);
+      generateLUT(p) {
+        const pair = (p && p.pair) || "teal-orange";
+        const strength = typeof (p && p.strength) === "number" ? p.strength : 50;
+        const pairDef = SPLIT_TONE_PAIRS[pair] || SPLIT_TONE_PAIRS["teal-orange"];
+        const key = pair + "_" + strength;
+        if (!_splitToneLutCache[key]) {
+          const s = strength / 100;
+          _splitToneLutCache[key] = buildLut(function(r, g, b) {
+            return splitToneCore(r, g, b, pairDef.shadowHue, pairDef.highlightHue, s);
+          });
+        }
+        return _splitToneLutCache[key];
       },
     },
     "lut-fuji-3510": {
@@ -1277,7 +1359,7 @@
       effects.push({
         type: "lut",
         params: {
-          lutData: def.generateLUT(),
+          lutData: def.generateLUT(p),
           lutSize: LUT_SIZE,
           intensity: pct(p.intensity, 85),
         },

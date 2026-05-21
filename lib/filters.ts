@@ -12,7 +12,7 @@ export type PresetId =
   | "studio-lighting"
   | "lut-kodak-2383"
   | "lut-bleach-bypass"
-  | "lut-teal-orange-pro"
+  | "split-tone-pro"
   | "lut-fuji-3510"
   | "lut-cool-fade"
   | "lut-warm-print";
@@ -265,13 +265,29 @@ export const PRESETS: PresetDef[] = [
     controls: lutControls(80),
   },
   {
-    id: "lut-teal-orange-pro",
-    name: "Teal/Orange Pro",
-    description: "Heavy cinematic grade.",
+    id: "split-tone-pro",
+    name: "Split Tone Pro",
+    description: "Hue-aware shadow/highlight grade.",
     type: "lut",
     webgl: true,
     pro: true,
-    controls: lutControls(80),
+    controls: [
+      {
+        kind: "select",
+        key: "pair",
+        label: "Color Pair",
+        default: "teal-orange",
+        options: [
+          { value: "teal-orange",   label: "Teal / Orange"   },
+          { value: "blue-gold",     label: "Blue / Gold"     },
+          { value: "green-magenta", label: "Green / Magenta" },
+          { value: "cyan-red",      label: "Cyan / Red"      },
+          { value: "purple-yellow", label: "Purple / Yellow" },
+        ],
+      },
+      pct("strength", "Split Strength", 50),
+      ...lutControls(80),
+    ],
   },
   {
     id: "lut-fuji-3510",
