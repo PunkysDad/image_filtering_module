@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Image Filter Platform",
-  description: "POC for a CMS-agnostic image filter SaaS dashboard",
+  title: "picmagIQ",
+  description: "Professional image filters for your content",
 };
 
 export default function RootLayout({

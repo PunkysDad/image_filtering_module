@@ -246,6 +246,8 @@ export default function Dashboard() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const dragSrcIdx = useRef<number | null>(null);
+  const baseFileRef = useRef<HTMLInputElement>(null);
+  const overlayFileRef = useRef<HTMLInputElement>(null);
   const debouncedText = useDebouncedValue(knockoutText, 300);
 
   const activeLayer =
@@ -445,31 +447,37 @@ export default function Dashboard() {
       <aside className="bg-ink-800 border-r border-ink-600 p-6 overflow-y-auto max-h-screen">
         <header className="mb-6">
           <h1 className="text-lg font-semibold tracking-tight text-ink-100">
-            Image Filter Platform
+            picmagIQ
           </h1>
-          <p className="text-xs text-ink-300 mt-1">POC dashboard</p>
+          <p className="text-xs text-[#9CA3AF] mt-1">Professional image filters for your content</p>
         </header>
 
         <LayerHeader>Base Image</LayerHeader>
 
         <Section title="Source">
-          <label className="block">
-            <span className="sr-only">Upload base image</span>
+          <div className="flex items-center gap-2 min-w-0">
             <input
+              ref={baseFileRef}
               type="file"
               accept="image/jpeg,image/png,image/webp"
               onChange={(e) => onUpload(e, "base")}
-              className="block w-full text-xs text-ink-200 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-ink-600 file:text-ink-100 file:text-xs hover:file:bg-ink-500 cursor-pointer"
+              className="hidden"
             />
-          </label>
-          {uploadingBase && (
-            <p className="text-xs text-ink-300 mt-2">Uploading…</p>
-          )}
-          {basePath && !uploadingBase && (
-            <p className="text-xs text-ink-300 mt-2 truncate">
-              Loaded: {basePath.split("/").pop()}
-            </p>
-          )}
+            <button
+              type="button"
+              onClick={() => baseFileRef.current?.click()}
+              className="shrink-0 rounded-md bg-ink-600 text-ink-100 text-xs py-1.5 px-3 hover:bg-ink-500 transition"
+            >
+              Choose File
+            </button>
+            <span className="text-xs text-[#9CA3AF] truncate min-w-0">
+              {uploadingBase
+                ? "Uploading…"
+                : basePath
+                ? basePath.split("/").pop()
+                : "No file chosen"}
+            </span>
+          </div>
         </Section>
 
         {/* TAB SWITCHER */}
@@ -482,8 +490,8 @@ export default function Dashboard() {
               className={[
                 "flex-1 text-xs py-1.5 rounded transition capitalize",
                 activeTab === tab
-                  ? "bg-ink-500 text-ink-100 font-medium"
-                  : "text-ink-400 hover:text-ink-100",
+                  ? "bg-ink-500 text-white font-medium"
+                  : "text-[#9CA3AF] hover:text-white",
               ].join(" ")}
             >
               {tab === "hsl" ? "HSL" : tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -550,7 +558,7 @@ export default function Dashboard() {
               }
             />
           ) : (
-            <p className="text-xs text-ink-400 text-center py-6">
+            <p className="text-xs text-ink-200 text-center py-6">
               Select a layer to edit its curves.
             </p>
           )
@@ -559,32 +567,38 @@ export default function Dashboard() {
         <LayerHeader>Overlay Image</LayerHeader>
 
         <Section title="Source">
-          <label className="block">
-            <span className="sr-only">Upload overlay image</span>
+          <div className="flex items-center gap-2 min-w-0">
             <input
+              ref={overlayFileRef}
               type="file"
               accept="image/jpeg,image/png,image/webp"
               onChange={(e) => onUpload(e, "overlay")}
-              className="block w-full text-xs text-ink-200 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-ink-600 file:text-ink-100 file:text-xs hover:file:bg-ink-500 cursor-pointer"
+              className="hidden"
             />
-          </label>
-          {uploadingOverlay && (
-            <p className="text-xs text-ink-300 mt-2">Uploading…</p>
-          )}
-          {overlayPath && !uploadingOverlay && (
-            <div className="flex items-center justify-between mt-2 gap-2">
-              <p className="text-xs text-ink-300 truncate">
-                Loaded: {overlayPath.split("/").pop()}
-              </p>
+            <button
+              type="button"
+              onClick={() => overlayFileRef.current?.click()}
+              className="shrink-0 rounded-md bg-ink-600 text-ink-100 text-xs py-1.5 px-3 hover:bg-ink-500 transition"
+            >
+              Choose File
+            </button>
+            <span className="text-xs text-[#9CA3AF] truncate min-w-0 flex-1">
+              {uploadingOverlay
+                ? "Uploading…"
+                : overlayPath
+                ? overlayPath.split("/").pop()
+                : "No file chosen"}
+            </span>
+            {overlayPath && !uploadingOverlay && (
               <button
                 type="button"
                 onClick={removeOverlay}
-                className="text-[11px] text-ink-300 hover:text-ink-100"
+                className="shrink-0 text-[11px] text-[#9CA3AF] hover:text-white transition"
               >
                 Remove
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </Section>
 
         {showOverlaySection && (
@@ -663,9 +677,9 @@ export default function Dashboard() {
             type="button"
             disabled={!basePath || exporting}
             onClick={onExport}
-            className="w-full rounded-md bg-accent-500 hover:bg-accent-400 disabled:bg-ink-600 disabled:text-ink-300 text-ink-900 font-medium text-sm py-2.5 transition"
+            className="w-full rounded-md bg-accent-500 hover:bg-accent-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm py-2.5 transition shadow-[0_0_12px_rgba(239,108,78,0.25)]"
           >
-            {exporting ? "Rendering export…" : "Export as WebP"}
+            {exporting ? "Rendering export…" : "Export"}
           </button>
           {uploadError && (
             <p className="text-xs text-red-400 mt-2">{uploadError}</p>
@@ -688,7 +702,7 @@ export default function Dashboard() {
           <span className="text-xs uppercase tracking-wider text-ink-300">
             Preview
           </span>
-          <span className="text-[11px] text-ink-400">
+          <span className="text-[11px] text-ink-200">
             {basePath ? "Live" : "Upload an image to begin"}
           </span>
         </div>
@@ -700,6 +714,19 @@ export default function Dashboard() {
             onLoad={() => setIframeReady(true)}
             className="absolute inset-0 w-full h-full border-0"
           />
+          {!basePath && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[radial-gradient(ellipse_at_center,_#1a1a20_0%,_#0b0b0d_70%)] pointer-events-none">
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#4a4a57" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+              <div className="text-center">
+                <p className="text-sm font-medium text-[#9CA3AF]">Upload an image to get started</p>
+                <p className="text-xs text-[#6B7280] mt-1.5">Supports JPEG, PNG, and WebP</p>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -739,7 +766,7 @@ function LayerStack({
 }) {
   if (layers.length === 0) {
     return (
-      <p className="text-xs text-ink-400 mb-2">
+      <p className="text-xs text-ink-200 mb-2">
         No layers yet — add one below.
       </p>
     );
@@ -882,7 +909,7 @@ function LayerCard({
               "text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
               maskOpen || isMaskActive(layer.mask)
                 ? "border-accent-500 text-accent-400 bg-accent-500/10"
-                : "border-ink-600 text-ink-500 hover:text-ink-300 hover:border-ink-400",
+                : "border-ink-400 text-ink-300 hover:text-white hover:border-ink-300",
             ].join(" ")}
             aria-label="Toggle mask panel"
           >
@@ -896,7 +923,7 @@ function LayerCard({
               e.stopPropagation();
               onRemove();
             }}
-            className="text-ink-500 hover:text-red-400 transition-colors"
+            className="text-ink-200 hover:text-red-400 transition-colors"
             aria-label="Remove layer"
           >
             <TrashIcon />
@@ -906,7 +933,7 @@ function LayerCard({
 
       {/* Intensity slider */}
       <div className="mt-2 flex items-center gap-2">
-        <span className="text-[10px] text-ink-400 shrink-0 w-12">Intensity</span>
+        <span className="text-[10px] text-ink-200 shrink-0 w-12">Intensity</span>
         <input
           type="range"
           min={0}
@@ -917,9 +944,9 @@ function LayerCard({
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
           onChange={(e) => onSetIntensity(Number(e.target.value))}
-          className="flex-1 min-w-0"
+          className="flex-1 min-w-0 layer-intensity-slider"
         />
-        <span className="text-[10px] text-ink-400 tabular-nums w-6 text-right shrink-0">
+        <span className="text-[10px] text-ink-200 tabular-nums w-6 text-right shrink-0">
           {layer.intensity}
         </span>
       </div>
@@ -1068,7 +1095,7 @@ function MaskPanel({
             <div>
               <div className="flex items-baseline justify-between mb-1">
                 <span className="text-[10px] text-ink-300">Range</span>
-                <span className="text-[10px] text-ink-400 tabular-nums">
+                <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.luminosity.min}–{mask.luminosity.max}
                 </span>
               </div>
@@ -1084,7 +1111,7 @@ function MaskPanel({
             <label className="block">
               <div className="flex items-baseline justify-between mb-1">
                 <span className="text-[10px] text-ink-300">Smoothness</span>
-                <span className="text-[10px] text-ink-400 tabular-nums">
+                <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.luminosity.smoothness}
                 </span>
               </div>
@@ -1151,7 +1178,7 @@ function MaskPanel({
                         "text-[10px] w-6 h-6 rounded-full border transition font-medium",
                         active
                           ? "border-current"
-                          : "border-ink-600 text-ink-400 hover:text-ink-200 hover:border-ink-400",
+                          : "border-ink-600 text-ink-200 hover:text-ink-200 hover:border-ink-400",
                       ].join(" ")}
                       style={active ? { color, borderColor: color } : undefined}
                     >
@@ -1164,7 +1191,7 @@ function MaskPanel({
             <label className="block">
               <div className="flex items-baseline justify-between mb-1">
                 <span className="text-[10px] text-ink-300">Expansion</span>
-                <span className="text-[10px] text-ink-400 tabular-nums">
+                <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.colorRange.expansion}
                 </span>
               </div>
@@ -1181,7 +1208,7 @@ function MaskPanel({
             <label className="block">
               <div className="flex items-baseline justify-between mb-1">
                 <span className="text-[10px] text-ink-300">Smoothness</span>
-                <span className="text-[10px] text-ink-400 tabular-nums">
+                <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.colorRange.smoothness}
                 </span>
               </div>
@@ -1244,7 +1271,7 @@ function PresetModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-ink-400 hover:text-ink-100 text-xl leading-none"
+            className="text-ink-200 hover:text-ink-100 text-xl leading-none"
             aria-label="Close"
           >
             ×
@@ -1464,7 +1491,7 @@ function Slider({
     <label className="block">
       <div className="flex items-baseline justify-between mb-1">
         <span className="text-xs text-ink-200">{label}</span>
-        <span className="text-[11px] text-ink-400 tabular-nums">{value}</span>
+        <span className="text-[11px] text-ink-200 tabular-nums">{value}</span>
       </div>
       <input
         type="range"
@@ -1698,7 +1725,7 @@ function CurvesPanel({
                 "text-[10px] font-medium px-2 py-0.5 rounded border transition",
                 activeCh === key
                   ? "border-current"
-                  : "border-ink-600 text-ink-400 hover:text-ink-200",
+                  : "border-[#4a4a57] text-[#9CA3AF] hover:text-white hover:border-[#6a6a78]",
               ].join(" ")}
               style={activeCh === key ? { color, borderColor: color } : undefined}
             >
@@ -1710,14 +1737,14 @@ function CurvesPanel({
           <button
             type="button"
             onClick={() => setCurve([[0, 0], [255, 255]])}
-            className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+            className="text-[11px] text-[#9CA3AF] hover:text-white transition"
           >
             Reset
           </button>
           <button
             type="button"
             onClick={() => onUpdate(defaultLayerCurves())}
-            className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+            className="text-[11px] text-[#9CA3AF] hover:text-white transition"
           >
             Reset All
           </button>
@@ -1740,7 +1767,7 @@ function CurvesPanel({
         />
       </div>
 
-      <p className="text-[10px] text-ink-500 mt-1.5 leading-snug">
+      <p className="text-[10px] text-[#6B7280] mt-1.5 leading-snug">
         Click to add point · Drag to move · Right-click or double-click to remove
       </p>
     </section>
@@ -1778,7 +1805,7 @@ function HslPanel({
         <button
           type="button"
           onClick={onReset}
-          className="text-[11px] text-ink-400 hover:text-ink-100 transition"
+          className="text-[11px] text-[#9CA3AF] hover:text-white transition"
         >
           Reset All
         </button>
@@ -1860,7 +1887,7 @@ function HslSlider({
     <label className="block">
       <div className="flex items-baseline justify-between mb-1">
         <span className="text-xs text-ink-300">{label}</span>
-        <span className="text-[11px] text-ink-400 tabular-nums">{formatted}</span>
+        <span className="text-[11px] text-ink-200 tabular-nums">{formatted}</span>
       </div>
       <input
         type="range"
@@ -1881,7 +1908,7 @@ function ChevronIcon({ open }: { open: boolean }) {
       width="12"
       height="12"
       viewBox="0 0 24 24"
-      fill="none"
+      fill="white"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
@@ -1910,7 +1937,7 @@ function ControlInput({
       <label className="block">
         <div className="flex items-baseline justify-between mb-1">
           <span className="text-xs text-ink-200">{control.label}</span>
-          <span className="text-[11px] text-ink-400 tabular-nums">{v}</span>
+          <span className="text-[11px] text-ink-200 tabular-nums">{v}</span>
         </div>
         <input
           type="range"
@@ -1946,15 +1973,28 @@ function ControlInput({
   if (control.kind === "toggle") {
     const v = typeof value === "boolean" ? value : control.default;
     return (
-      <label className="flex items-center justify-between cursor-pointer">
+      <div className="flex items-center justify-between">
         <span className="text-xs text-ink-200">{control.label}</span>
-        <input
-          type="checkbox"
-          checked={v}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
-        />
-      </label>
+        <div
+          role="checkbox"
+          aria-checked={v}
+          tabIndex={0}
+          onClick={() => onChange(!v)}
+          onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); onChange(!v); } }}
+          className={[
+            "w-5 h-5 rounded border flex items-center justify-center cursor-pointer transition-colors shrink-0",
+            v
+              ? "bg-accent-500/20 border-accent-500"
+              : "bg-ink-800 border-ink-300",
+          ].join(" ")}
+        >
+          {v && (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M2 6L5 9L10 3" stroke="#E85D26" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+        </div>
+      </div>
     );
   }
   // color
@@ -1981,7 +2021,7 @@ function GripIcon() {
       height="14"
       viewBox="0 0 10 14"
       fill="currentColor"
-      className="text-ink-500 cursor-grab shrink-0"
+      className="text-ink-200 cursor-grab shrink-0"
       aria-hidden="true"
     >
       <circle cx="3" cy="2.5" r="1.5" />
