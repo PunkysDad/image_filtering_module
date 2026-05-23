@@ -1450,6 +1450,25 @@
     const p = params || {};
     const info = { width: w, height: h, seed: (seed >>> 0) || 1 };
 
+    // Save source alpha before any effects run. Only activates when the source
+    // contains transparent pixels — fully-opaque images (JPEGs, WebPs) skip
+    // everything and add zero overhead to the existing editor path.
+    let savedAlpha = null;
+    {
+      const tmp = makeCanvas(w, h);
+      const tmpCtx = tmp.getContext("2d");
+      tmpCtx.drawImage(sourceImg, 0, 0, w, h);
+      const srcData = tmpCtx.getImageData(0, 0, w, h).data;
+      let hasTransparency = false;
+      for (let i = 3; i < srcData.length; i += 4) {
+        if (srcData[i] < 255) { hasTransparency = true; break; }
+      }
+      if (hasTransparency) {
+        savedAlpha = new Float32Array(w * h);
+        for (let i = 0; i < w * h; i++) savedAlpha[i] = srcData[i * 4 + 3];
+      }
+    }
+
     if (def.type === "lut") {
       // LUT path: source pixels only — WebGL colour-grades them.
       ctx.drawImage(sourceImg, 0, 0, w, h);
@@ -1489,6 +1508,16 @@
 
     // Per-layer curves: last per-layer adjustment before result passes on.
     if (curves) applyCurves(targetCanvas, curves);
+
+    // Restore original source alpha, correcting any corruption introduced by
+    // overlay effects (drawVignette source-over, drawHalation alpha=255
+    // intermediate) or the WebGL LUT pass. Transparent pixels in the isolated
+    // subject PNG remain transparent regardless of what effects painted there.
+    if (savedAlpha !== null) {
+      const effData = ctx.getImageData(0, 0, w, h);
+      for (let i = 0; i < w * h; i++) effData.data[i * 4 + 3] = savedAlpha[i];
+      ctx.putImageData(effData, 0, 0);
+    }
   }
 
   // ---------- Orchestrator ----------

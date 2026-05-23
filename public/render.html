@@ -135,7 +135,8 @@ vec4 applyLUT(vec4 color) {
   );
 
   vec4 lutColor = mix(texture(u_lut, uv0), texture(u_lut, uv1), zFraction);
-  return mix(color, lutColor, u_intensity);
+  vec4 graded = mix(color, lutColor, u_intensity);
+  return vec4(graded.rgb, color.a);
 }
 
 void main() {

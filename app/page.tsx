@@ -17,12 +17,13 @@ import {
   defaultParams,
 } from "@/lib/filters";
 import AiTutor from "@/components/AiTutor";
+import CompositeWorkspace from "@/components/CompositeWorkspace";
 
 type Params = Record<string, string | number | boolean>;
 
-type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
+export type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
 
-type MaskChannelSettings = {
+export type MaskChannelSettings = {
   expansion: number;  // 0–100
   smoothness: number; // 0–100
   invert: boolean;
@@ -42,7 +43,7 @@ function defaultChannels(): Record<MaskChannel, MaskChannelSettings> {
   };
 }
 
-type LayerMask = {
+export type LayerMask = {
   luminosity: {
     enabled: boolean;
     min: number;
@@ -75,11 +76,11 @@ const MASK_CHANNEL_DEFS: { key: MaskChannel; label: string; color: string }[] = 
   { key: "magentas", label: "M", color: "#ff44cc" },
 ];
 
-type CurvePoint = [number, number]; // [input 0–255, output 0–255]
-type Curve = CurvePoint[];
-type CurveChannel = "rgb" | "r" | "g" | "b";
+export type CurvePoint = [number, number]; // [input 0–255, output 0–255]
+export type Curve = CurvePoint[];
+export type CurveChannel = "rgb" | "r" | "g" | "b";
 
-type LayerCurves = {
+export type LayerCurves = {
   rgb: Curve;
   r:   Curve;
   g:   Curve;
@@ -172,8 +173,8 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
   }
 }
 
-type HslChannel = { hue: number; saturation: number; luminance: number };
-type HslState = {
+export type HslChannel = { hue: number; saturation: number; luminance: number };
+export type HslState = {
   reds: HslChannel;
   oranges: HslChannel;
   yellows: HslChannel;
@@ -216,6 +217,10 @@ const INITIAL_PRESET_ID: PresetId = "film-grain";
 const INITIAL_LAYER_ID = "initial";
 
 export default function Dashboard() {
+  // TODO: Replace isPremium with real subscription data when payments are implemented.
+  const isPremium = true;
+  const [mainTab, setMainTab] = useState<"editor" | "composite">("editor");
+
   const [basePath, setBasePath] = useState<string | null>(null);
   const [overlayPath, setOverlayPath] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -462,7 +467,39 @@ export default function Dashboard() {
   const showOverlaySection = !!overlayPath;
 
   return (
-    <main className="min-h-screen grid grid-cols-[380px_1fr] gap-0">
+    <div className="min-h-screen flex flex-col">
+      {/* Top navigation — tab switcher between Editor and Composite */}
+      <nav className="shrink-0 bg-ink-800 border-b border-ink-600 flex items-center px-4 h-10 gap-1">
+        <span className="text-xs font-bold tracking-tight text-ink-100 mr-4">picmagIQ</span>
+        {(["editor", "composite"] as const).map((tab) => {
+          if (tab === "composite" && !isPremium) return null;
+          return (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setMainTab(tab)}
+              className={[
+                "text-xs px-3 py-1 rounded transition capitalize",
+                mainTab === tab
+                  ? "bg-ink-600 text-white font-medium"
+                  : "text-ink-300 hover:text-white",
+              ].join(" ")}
+            >
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === "composite" && (
+                <span className="ml-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
+                  PRO
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+    {mainTab === "composite" && isPremium ? (
+      <CompositeWorkspace />
+    ) : (
+    <main className="flex-1 grid grid-cols-[380px_1fr] gap-0">
       {/* LEFT PANEL */}
       <aside className="bg-ink-800 border-r border-ink-600 p-6 overflow-y-auto max-h-screen">
         <header className="mb-6">
@@ -762,6 +799,8 @@ export default function Dashboard() {
       {/* TODO: Replace isPremium with real subscription data when payments are implemented. */}
       <AiTutor layers={layers} hslAdjustments={hslAdjustments} isPremium={true} />
     </main>
+    )}
+    </div>
   );
 }
 
