@@ -16,6 +16,9 @@ export type Profile = {
   tier: "basic" | "premium";
   created_at: string;
   updated_at: string;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  subscription_status?: string | null;
 };
 
 type AuthContextValue = {
@@ -72,38 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        const uid = session.user.id;
-        void (async () => {
-          await fetchProfile(uid);
-          // Apply a tier that was intended at signup but deferred until the
-          // session existed (e.g. a Premium signup that required email
-          // confirmation, where set-tier could not run without a session).
-          // Safe for Basic signups: if no pending tier is stored, this no-ops.
-          let pendingTier: string | null = null;
-          let pendingUid: string | null = null;
-          try {
-            pendingTier = localStorage.getItem("picmagiq_pending_tier");
-            pendingUid = localStorage.getItem("picmagiq_pending_tier_uid");
-          } catch {
-            pendingTier = null;
-          }
-          if (pendingTier === "premium" && pendingUid === uid) {
-            const res = await fetch("/api/auth/set-tier", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ userId: uid, tier: "premium" }),
-            }).catch(() => null);
-            if (res && res.ok) {
-              await fetchProfile(uid);
-              try {
-                localStorage.removeItem("picmagiq_pending_tier");
-                localStorage.removeItem("picmagiq_pending_tier_uid");
-              } catch {
-                // Ignore storage failures.
-              }
-            }
-          }
-        })();
+        void fetchProfile(session.user.id);
       } else {
         setProfile(null);
       }
