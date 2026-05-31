@@ -15,6 +15,7 @@ export interface LayerDef {
 
 export interface ExportJob {
   imagePath: string; // public path like "/uploads/<uuid>.jpg"
+  format?: "webp" | "jpeg" | "png"; // output encoding; defaults to webp
   layers: LayerDef[];
   seed?: number;
   origin: string; // e.g. "http://localhost:3000"
@@ -160,9 +161,18 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
 
     const { width, height } = await sharp(pngBuffer).metadata();
     const id = uuidv4();
-    const fileName = `${id}.webp`;
+    const format = job.format ?? "webp";
+    const ext = format === "jpeg" ? "jpg" : format; // "webp" | "jpg" | "png"
+    const fileName = `${id}.${ext}`;
     const filePath = path.join(EXPORTS_DIR, fileName);
-    await sharp(pngBuffer).webp({ quality: 92 }).toFile(filePath);
+    const encoder = sharp(pngBuffer);
+    if (format === "jpeg") {
+      await encoder.jpeg({ quality: 92 }).toFile(filePath);
+    } else if (format === "png") {
+      await encoder.png().toFile(filePath);
+    } else {
+      await encoder.webp({ quality: 92 }).toFile(filePath);
+    }
 
     return {
       downloadUrl: `/exports/${fileName}`,

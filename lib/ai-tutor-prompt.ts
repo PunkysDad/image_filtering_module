@@ -25,7 +25,6 @@ Gives your photo the look and texture of analog film — slightly muted colors, 
 - **Intensity** (0–100, default 70) — How strongly the overall film look is applied. Higher values make the effect more pronounced: deeper contrast, stronger grain, heavier vignette.
 - **Grain Size** (Fine / Medium / Coarse) — The physical size of the grain texture. Fine grain is subtle and suits portraits. Coarse grain is dramatic and cinematic.
 - **Vignette** (0–100, default 40) — How dark the corners and edges of the image become. Higher values draw the eye toward the center.
-- **HQ Grain** (toggle, Pro) — Upgrades the grain to a higher-quality version. The grain pattern will look richer and more organic, particularly in smooth areas like skies.
 
 ---
 
@@ -37,7 +36,6 @@ A Hollywood-style color grade that pushes shadows toward teal (blue-green) and h
 - **Teal/Orange** (0–100, default 65) — How strongly shadows are pushed toward teal and highlights toward orange. At low values the shift is subtle; at high values it's bold and unmistakably cinematic.
 - **Letterbox** (on/off) — Adds solid black bars at the top and bottom of the image to create the classic 2.39:1 widescreen film aspect ratio.
 - **Bloom** (0–100, default 35) — Controls two related effects at once: the soft glow that spills outward from bright areas, and subtle horizontal streaks of light that extend from the brightest points (like anamorphic lens flares). Higher values make both more visible.
-- **HQ Grain** (toggle, Pro) — Adds a finer, higher-quality grain pass on top of the effect.
 - **Lens Aberration** (0–100, Pro) — Adds a slight color fringing at the edges of the frame, as if shot through a vintage lens.
 
 ---
@@ -49,7 +47,6 @@ Creates a faded, vintage look by lifting the darkest parts of the image so that 
 - **Intensity** (0–100, default 70) — How strongly the overall faded, scratched look is applied.
 - **Fade** (0–100, default 55) — How much the blacks are lifted. Higher values make the image look more "matte" or "faded," as if printed on matte paper or aged with time.
 - **Cool Shift** (0–100, default 40) — Adds a subtle blue cast across the whole image. Higher values make the image feel cooler and more editorial.
-- **HQ Grain** (toggle, Pro) — Upgrades to higher-quality grain.
 
 ---
 
@@ -67,7 +64,6 @@ Converts your photo to black and white with a strong, punchy contrast curve. Add
   - **Blue Filter** — Brightens skies, darkens warm skin tones. High-contrast, graphic look.
 - **Shadow Tone** (color picker, default dark blue-black) — The color cast applied to the darkest parts of the image. Think of it as a tint in the shadows.
 - **Highlight Tone** (color picker, default warm cream) — The color cast applied to the brightest parts of the image.
-- **HQ Grain** (toggle, Pro) — Higher-quality grain texture.
 
 ---
 
@@ -102,7 +98,6 @@ Simulates a professional studio lighting setup by painting a warm spotlight onto
 - **Light Y** (0–100, default 40) — Vertical position of the spotlight. 0 places it at the top, 100 at the bottom.
 - **Light Radius** (0–100, default 55) — How wide the spotlight beam is. Lower values create a tighter, more focused spot; higher values spread the light more broadly.
 - **Light Power** (0–100, default 55) — How bright the spotlight is. Raising this will increase the brightness of the lit area and deepen the shadow on the opposite side.
-- **Lens Distortion** (-50 to +50, Pro) — Bends the image. Negative values create a barrel distortion (edges bow outward), positive values create pincushion distortion (edges bow inward). Both simulate characteristics of real lenses.
 
 ---
 
@@ -126,7 +121,7 @@ Applies a professional split tone grade — shadows are pushed toward one color 
 Controls:
 - **Color Pair** — choose from five predefined shadow/highlight combinations: Teal/Orange (cinematic standard), Blue/Gold (cool shadows, warm highlights), Green/Magenta (editorial), Cyan/Red (high contrast), Purple/Yellow (dramatic).
 - **Split Strength** (0–100) — how aggressively the shadow and highlight hues are pushed. Lower values are subtle and refined; higher values are bold and immediately visible.
-- Intensity, Grain, and Lens Aberration work the same as other Pro presets.
+- Intensity and Grain work the same as other Pro presets.
 
 ### Fuji 3510
 Emulates the Fuji 3510 print stock. Colors have a slightly cool, greenish quality in the midtones. Deep shadows get a subtle pink-magenta push. Shadow detail is lifted gently and highlights roll off softly without clipping. The overall feel is slightly muted and restrained compared to Kodak 2383.
@@ -136,6 +131,15 @@ A matte editorial look with a lifted, faded shadow base and a cool blue cast acr
 
 ### Warm Print
 Rich and inviting: shadows are lifted and pushed warm, midtones are saturated, and highlights compress gently so they don't blow out. The overall image feels golden, printed, and tactile.
+
+---
+
+### Focal Blur
+Applies a zoom motion blur that radiates outward from a focal region you define, keeping your chosen subject sharp while the surrounding area appears to rush past — like a long-exposure zoom shot. The focal region is set by drawing a box directly on the preview image.
+
+Controls:
+- **Intensity** (0–100) — how strong the motion blur effect is outside the focal region. Lower values are subtle; higher values create a dramatic rush effect.
+- **Focal Region** (bounding box on preview) — drag to reposition, drag handles to resize. The area inside the box stays sharp; everything outside blurs outward from the box center.
 
 ---
 

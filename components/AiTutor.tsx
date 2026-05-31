@@ -164,7 +164,7 @@ export default function AiTutor({ layers, hslAdjustments, isPremium = true }: Pr
               type="button"
               onClick={() => setIsOpen(false)}
               aria-label="Close AI Assistant"
-              className="text-ink-300 hover:text-ink-100 transition-colors p-1 rounded"
+              className="text-ink-200 hover:text-ink-100 transition-colors p-1 rounded"
             >
               <CloseIcon />
             </button>
@@ -173,7 +173,7 @@ export default function AiTutor({ layers, hslAdjustments, isPremium = true }: Pr
           {/* Message list */}
           <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
             {messages.length === 0 && !isLoading && (
-              <p className="text-xs text-ink-300 text-center mt-6 px-4 leading-relaxed">
+              <p className="text-xs text-ink-200 text-center mt-6 px-4 leading-relaxed">
                 Ask me anything about the filters, layers, masks, or controls in this editor.
               </p>
             )}
@@ -211,7 +211,7 @@ export default function AiTutor({ layers, hslAdjustments, isPremium = true }: Pr
               rows={1}
               placeholder="Ask a question…"
               disabled={isLoading}
-              className="flex-1 resize-none bg-ink-700 border border-ink-500 rounded-lg text-sm text-ink-100 placeholder:text-ink-400 px-3 py-2 focus:outline-none focus:border-accent-500 transition-colors disabled:opacity-50"
+              className="flex-1 resize-none bg-ink-700 border border-ink-500 rounded-lg text-sm text-ink-100 placeholder:text-ink-200 px-3 py-2 focus:outline-none focus:border-accent-500 transition-colors disabled:opacity-50"
               style={{ maxHeight: 96, lineHeight: "1.5" }}
               onInput={(e) => {
                 const el = e.currentTarget;

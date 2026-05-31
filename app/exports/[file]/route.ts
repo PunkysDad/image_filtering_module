@@ -13,7 +13,15 @@ export async function GET(
 ) {
   const safe = path.basename(params.file);
   if (safe !== params.file) return new Response("Bad path", { status: 400 });
-  if (path.extname(safe).toLowerCase() !== ".webp") {
+  const ext = path.extname(safe).toLowerCase();
+  const contentTypeByExt: Record<string, string> = {
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+  };
+  const contentType = contentTypeByExt[ext];
+  if (!contentType) {
     return new Response("Unsupported type", { status: 415 });
   }
   const full = path.join(EXPORTS_DIR, safe);
@@ -21,7 +29,7 @@ export async function GET(
     const data = await fs.readFile(full);
     return new Response(data, {
       headers: {
-        "Content-Type": "image/webp",
+        "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${safe}"`,
         "Cache-Control": "no-store",
       },

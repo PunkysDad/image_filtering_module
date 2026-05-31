@@ -22,6 +22,7 @@ interface LayerBody {
 
 interface ExportBody {
   imagePath?: string;
+  format?: string;
   layers?: LayerBody[];
   seed?: number;
   overlayImagePath?: string | null;
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
 
   const {
     imagePath,
+    format,
     layers,
     seed,
     overlayImagePath,
@@ -111,9 +113,14 @@ export async function POST(req: NextRequest) {
     params: l.params ?? {},
   }));
 
+  // WebP is the default; only JPEG and PNG are otherwise accepted.
+  const exportFormat: "webp" | "jpeg" | "png" =
+    format === "jpeg" || format === "png" ? format : "webp";
+
   try {
     const result = await renderToWebp({
       imagePath,
+      format: exportFormat,
       layers: normalizedLayers,
       seed: typeof seed === "number" ? seed : 1,
       origin: originFromRequest(req),

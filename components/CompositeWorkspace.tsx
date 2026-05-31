@@ -164,6 +164,26 @@ function useDebouncedValue<T>(value: T, ms: number): T {
   return v;
 }
 
+// ---------- Brush mask edit state ----------
+
+type MaskEditState = {
+  subjectId: string;
+  mode: "erase" | "restore";
+  brushSize: number;
+  brushHardness: number;
+  undoStack: Float32Array[];
+  redoStack: Float32Array[];
+};
+
+type MaskEditUIState = {
+  subjectId: string;
+  mode: "erase" | "restore";
+  brushSize: number;
+  brushHardness: number;
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
 // ============================================================
 // Module-level utilities
 // ============================================================
@@ -626,6 +646,15 @@ export default function CompositeWorkspace() {
   const draggingSubjId = useRef<string | null>(null);
   const dragStartPos   = useRef<{ mx: number; my: number; ox: number; oy: number } | null>(null);
 
+  // Brush mask editing
+  const maskEditRef           = useRef<MaskEditState | null>(null);
+  const subjectOriginalAlphas = useRef(new Map<string, Float32Array>());
+  const subjectCurrentAlphas  = useRef(new Map<string, Float32Array>());
+  const brushPainting         = useRef(false);
+  const brushCursorRef        = useRef<HTMLDivElement>(null);
+  const lastBrushMousePos     = useRef<{ x: number; y: number } | null>(null);
+  const [maskEditUI, setMaskEditUI] = useState<MaskEditUIState | null>(null);
+
   // Composite ready flag
   const [hasComposite, setHasComposite] = useState(false);
 
@@ -633,6 +662,7 @@ export default function CompositeWorkspace() {
   const [exporting, setExporting]     = useState(false);
   const [exportUrl, setExportUrl]     = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<"webp" | "jpeg" | "png">("webp");
 
   const bgActiveLayer = bgLayers.find((l) => l.id === bgActiveLayerId) ?? bgLayers[0] ?? null;
 
@@ -667,7 +697,17 @@ export default function CompositeWorkspace() {
     canvas.height = bgC.height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(bgC, 0, 0);
+
+    const editState = maskEditRef.current;
+    const editingId = !forExport && editState ? editState.subjectId : null;
+
+    if (editingId) {
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(bgC, 0, 0);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.drawImage(bgC, 0, 0);
+    }
 
     const activeId  = activeSubjectIdRef.current;
     const allSubjs  = subjectsRef.current;
@@ -678,14 +718,27 @@ export default function CompositeWorkspace() {
       const sH = subC.height * subj.scale;
       const sX = bgC.width  / 2 + subj.position.x - sW / 2;
       const sY = bgC.height / 2 + subj.position.y - sH / 2;
-      ctx.drawImage(subC, sX, sY, sW, sH);
-      if (!forExport && subj.id === activeId && allSubjs.length > 1) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(239, 108, 78, 0.7)";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 3]);
-        ctx.strokeRect(sX + 1, sY + 1, sW - 2, sH - 2);
-        ctx.restore();
+
+      if (editingId && subj.id !== editingId) {
+        ctx.globalAlpha = 0.4;
+        ctx.drawImage(subC, sX, sY, sW, sH);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.drawImage(subC, sX, sY, sW, sH);
+        if (editingId && subj.id === editingId) {
+          ctx.save();
+          ctx.strokeStyle = "white";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(sX + 1, sY + 1, sW - 2, sH - 2);
+          ctx.restore();
+        } else if (!forExport && subj.id === activeId && allSubjs.length > 1) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(239, 108, 78, 0.7)";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 3]);
+          ctx.strokeRect(sX + 1, sY + 1, sW - 2, sH - 2);
+          ctx.restore();
+        }
       }
     }
     setHasComposite(true);
@@ -716,7 +769,17 @@ export default function CompositeWorkspace() {
     target.width  = src.width;
     target.height = src.height;
     const ctx = target.getContext("2d");
-    if (ctx) ctx.drawImage(src, 0, 0);
+    if (!ctx) return;
+    ctx.drawImage(src, 0, 0);
+    // Re-apply brush-edited alpha if present so filter re-renders don't destroy edits
+    const editedAlpha = subjectCurrentAlphas.current.get(subjectId);
+    if (editedAlpha && editedAlpha.length === src.width * src.height) {
+      const imgData = ctx.getImageData(0, 0, src.width, src.height);
+      for (let i = 0; i < editedAlpha.length; i++) {
+        imgData.data[i * 4 + 3] = Math.round(Math.max(0, Math.min(1, editedAlpha[i])) * 255);
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
   }, []);
 
   // Subject render queue — processes subjects sequentially through the single sub iframe
@@ -842,6 +905,164 @@ export default function CompositeWorkspace() {
     dispatchSubjects({ type: "set-scale", id, scale: 1.0 });
   };
 
+  // ---------- Mask brush edit callbacks ----------
+
+  const applyAlphaToOffscreen = useCallback((subjectId: string, alpha: Float32Array) => {
+    const canvas = subjectOffscreens.current.get(subjectId);
+    if (!canvas || !canvas.width) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < alpha.length; i++) {
+      imgData.data[i * 4 + 3] = Math.round(Math.max(0, Math.min(1, alpha[i])) * 255);
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }, []);
+
+  const enterMaskEdit = useCallback((subjectId: string) => {
+    if (maskEditRef.current?.subjectId === subjectId) return;
+    maskEditRef.current = null;
+    const offscreen = subjectOffscreens.current.get(subjectId);
+    if (!offscreen || !offscreen.width) return;
+    if (!subjectOriginalAlphas.current.has(subjectId)) {
+      const ctx = offscreen.getContext("2d");
+      if (!ctx) return;
+      const imgData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
+      const alpha = new Float32Array(offscreen.width * offscreen.height);
+      for (let i = 0; i < alpha.length; i++) alpha[i] = imgData.data[i * 4 + 3] / 255;
+      subjectOriginalAlphas.current.set(subjectId, alpha);
+      if (!subjectCurrentAlphas.current.has(subjectId)) {
+        subjectCurrentAlphas.current.set(subjectId, alpha.slice());
+      }
+    }
+    maskEditRef.current = { subjectId, mode: "erase", brushSize: 20, brushHardness: 60, undoStack: [], redoStack: [] };
+    setMaskEditUI({ subjectId, mode: "erase", brushSize: 20, brushHardness: 60, canUndo: false, canRedo: false });
+    redrawComposite();
+  }, [redrawComposite]);
+
+  const exitMaskEdit = useCallback(() => {
+    maskEditRef.current = null;
+    brushPainting.current = false;
+    if (brushCursorRef.current) brushCursorRef.current.style.display = "none";
+    setMaskEditUI(null);
+    redrawComposite();
+  }, [redrawComposite]);
+
+  const applyBrushAt = useCallback((canvasX: number, canvasY: number, displayScale: number) => {
+    const edit = maskEditRef.current;
+    if (!edit) return;
+    const bgC = bgOffscreen.current;
+    if (!bgC) return;
+    const subj = subjectsRef.current.find((s) => s.id === edit.subjectId);
+    if (!subj) return;
+    const subC = subjectOffscreens.current.get(subj.id);
+    if (!subC || !subC.width) return;
+    const sW = subC.width  * subj.scale;
+    const sH = subC.height * subj.scale;
+    const sX = bgC.width  / 2 + subj.position.x - sW / 2;
+    const sY = bgC.height / 2 + subj.position.y - sH / 2;
+    const imgX = (canvasX - sX) / subj.scale;
+    const imgY = (canvasY - sY) / subj.scale;
+    const iW   = subC.width;
+    const iH   = subC.height;
+    const currentAlpha  = subjectCurrentAlphas.current.get(subj.id);
+    const originalAlpha = subjectOriginalAlphas.current.get(subj.id);
+    if (!currentAlpha || !originalAlpha) return;
+    const brushRadiusPx = (edit.brushSize / 2) * displayScale / subj.scale;
+    const radiusCeil    = Math.ceil(brushRadiusPx);
+    const hardness      = edit.brushHardness / 100;
+    const minPX = Math.max(0, Math.floor(imgX - radiusCeil));
+    const maxPX = Math.min(iW - 1, Math.ceil(imgX + radiusCeil));
+    const minPY = Math.max(0, Math.floor(imgY - radiusCeil));
+    const maxPY = Math.min(iH - 1, Math.ceil(imgY + radiusCeil));
+    for (let py = minPY; py <= maxPY; py++) {
+      for (let px = minPX; px <= maxPX; px++) {
+        const dist = Math.sqrt((px - imgX) ** 2 + (py - imgY) ** 2);
+        if (dist > brushRadiusPx) continue;
+        const t        = dist / brushRadiusPx;
+        const strength = hardness * (t < 1 ? 1 : 0) + (1 - hardness) * Math.exp(-4 * t * t);
+        const idx = py * iW + px;
+        if (edit.mode === "erase") {
+          currentAlpha[idx] = currentAlpha[idx] * (1 - strength);
+        } else {
+          currentAlpha[idx] = currentAlpha[idx] + (originalAlpha[idx] - currentAlpha[idx]) * strength;
+        }
+      }
+    }
+    const ctx = subC.getContext("2d");
+    if (!ctx) return;
+    const imgData = ctx.getImageData(0, 0, iW, iH);
+    for (let i = 0; i < currentAlpha.length; i++) {
+      imgData.data[i * 4 + 3] = Math.round(Math.max(0, Math.min(1, currentAlpha[i])) * 255);
+    }
+    ctx.putImageData(imgData, 0, 0);
+    redrawComposite();
+  }, [redrawComposite]);
+
+  const maskUndo = useCallback(() => {
+    const edit = maskEditRef.current;
+    if (!edit || edit.undoStack.length === 0) return;
+    const current = subjectCurrentAlphas.current.get(edit.subjectId);
+    if (!current) return;
+    edit.redoStack.push(current.slice());
+    const prev = edit.undoStack.pop()!;
+    subjectCurrentAlphas.current.set(edit.subjectId, prev);
+    applyAlphaToOffscreen(edit.subjectId, prev);
+    setMaskEditUI((u) => u ? { ...u, canUndo: edit.undoStack.length > 0, canRedo: true } : null);
+    redrawComposite();
+  }, [applyAlphaToOffscreen, redrawComposite]);
+
+  const maskRedo = useCallback(() => {
+    const edit = maskEditRef.current;
+    if (!edit || edit.redoStack.length === 0) return;
+    const current = subjectCurrentAlphas.current.get(edit.subjectId);
+    if (!current) return;
+    edit.undoStack.push(current.slice());
+    const next = edit.redoStack.pop()!;
+    subjectCurrentAlphas.current.set(edit.subjectId, next);
+    applyAlphaToOffscreen(edit.subjectId, next);
+    setMaskEditUI((u) => u ? { ...u, canUndo: true, canRedo: edit.redoStack.length > 0 } : null);
+    redrawComposite();
+  }, [applyAlphaToOffscreen, redrawComposite]);
+
+  const setMaskEditMode = useCallback((mode: "erase" | "restore") => {
+    if (!maskEditRef.current) return;
+    maskEditRef.current.mode = mode;
+    setMaskEditUI((prev) => prev ? { ...prev, mode } : null);
+  }, []);
+
+  const setMaskBrushSize = useCallback((brushSize: number) => {
+    if (!maskEditRef.current) return;
+    maskEditRef.current.brushSize = brushSize;
+    setMaskEditUI((prev) => prev ? { ...prev, brushSize } : null);
+    if (brushCursorRef.current && lastBrushMousePos.current) {
+      const { x, y } = lastBrushMousePos.current;
+      brushCursorRef.current.style.width  = `${brushSize}px`;
+      brushCursorRef.current.style.height = `${brushSize}px`;
+      brushCursorRef.current.style.left   = `${x - brushSize / 2}px`;
+      brushCursorRef.current.style.top    = `${y - brushSize / 2}px`;
+    }
+  }, []);
+
+  const setMaskBrushHardness = useCallback((brushHardness: number) => {
+    if (!maskEditRef.current) return;
+    maskEditRef.current.brushHardness = brushHardness;
+    setMaskEditUI((prev) => prev ? { ...prev, brushHardness } : null);
+  }, []);
+
+  // Keyboard shortcuts for undo/redo (only when edit mode active)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!maskEditRef.current) return;
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta) return;
+      if (e.key === "z" && !e.shiftKey) { e.preventDefault(); maskUndo(); }
+      if ((e.key === "z" && e.shiftKey) || e.key === "y") { e.preventDefault(); maskRedo(); }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [maskUndo, maskRedo]);
+
   // ---------- Subject drag on composite canvas ----------
 
   const onPreviewMouseDown = useCallback(
@@ -856,6 +1077,22 @@ export default function CompositeWorkspace() {
       const scaleY = canvas.height / rect.height;
       const cx = (e.clientX - rect.left) * scaleX;
       const cy = (e.clientY - rect.top)  * scaleY;
+
+      // Edit mode — begin brush stroke
+      if (maskEditRef.current) {
+        e.preventDefault();
+        const edit = maskEditRef.current;
+        const current = subjectCurrentAlphas.current.get(edit.subjectId);
+        if (current) {
+          if (edit.undoStack.length >= 30) edit.undoStack.shift();
+          edit.undoStack.push(current.slice());
+          edit.redoStack.length = 0;
+          setMaskEditUI((prev) => prev ? { ...prev, canUndo: true, canRedo: false } : null);
+        }
+        brushPainting.current = true;
+        applyBrushAt(cx, cy, scaleX);
+        return;
+      }
 
       // Reverse-order hit test — last drawn (topmost) wins
       const allSubjects = subjectsRef.current;
@@ -882,11 +1119,37 @@ export default function CompositeWorkspace() {
       setActiveSubjectId(null);
       redrawComposite();
     },
-    [redrawComposite],
+    [redrawComposite, applyBrushAt],
   );
 
   const onPreviewMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // Edit mode — continue brush stroke and update cursor
+      if (maskEditRef.current) {
+        if (brushPainting.current) {
+          const canvas = compositeCanvasRef.current;
+          if (canvas) {
+            const rect   = canvas.getBoundingClientRect();
+            const scaleX = canvas.width  / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const cx = (e.clientX - rect.left) * scaleX;
+            const cy = (e.clientY - rect.top)  * scaleY;
+            applyBrushAt(cx, cy, scaleX);
+          }
+        }
+        lastBrushMousePos.current = { x: e.clientX, y: e.clientY };
+        const size = maskEditRef.current.brushSize;
+        if (brushCursorRef.current) {
+          brushCursorRef.current.style.display = "block";
+          brushCursorRef.current.style.left   = `${e.clientX - size / 2}px`;
+          brushCursorRef.current.style.top    = `${e.clientY - size / 2}px`;
+          brushCursorRef.current.style.width  = `${size}px`;
+          brushCursorRef.current.style.height = `${size}px`;
+        }
+        e.preventDefault();
+        return;
+      }
+
       if (!isDragging.current || !dragStartPos.current || !draggingSubjId.current) return;
       e.preventDefault();
       const canvas = compositeCanvasRef.current;
@@ -902,10 +1165,25 @@ export default function CompositeWorkspace() {
         position: { x: dragStartPos.current.ox + dx, y: dragStartPos.current.oy + dy },
       });
     },
-    [],
+    [applyBrushAt],
   );
 
   const onPreviewMouseUp = useCallback(() => {
+    if (maskEditRef.current) {
+      brushPainting.current = false;
+      return;
+    }
+    isDragging.current = false;
+    draggingSubjId.current = null;
+    dragStartPos.current = null;
+  }, []);
+
+  const onPreviewMouseLeave = useCallback(() => {
+    if (maskEditRef.current) {
+      brushPainting.current = false;
+      if (brushCursorRef.current) brushCursorRef.current.style.display = "none";
+      return;
+    }
     isDragging.current = false;
     draggingSubjId.current = null;
     dragStartPos.current = null;
@@ -916,6 +1194,11 @@ export default function CompositeWorkspace() {
   const onExportComposite = () => {
     const canvas = compositeCanvasRef.current;
     if (!canvas || !canvas.width) return;
+    const mime =
+      exportFormat === "jpeg" ? "image/jpeg"
+      : exportFormat === "png" ? "image/png"
+      : "image/webp";
+    const ext = exportFormat === "jpeg" ? "jpg" : exportFormat;
     setExporting(true);
     setExportError(null);
     setExportUrl(null);
@@ -928,9 +1211,9 @@ export default function CompositeWorkspace() {
         const url = URL.createObjectURL(blob);
         setExportUrl(url);
         const a = document.createElement("a");
-        a.href = url; a.download = "composite.webp"; a.click();
+        a.href = url; a.download = `composite.${ext}`; a.click();
       },
-      "image/webp",
+      mime,
       0.92,
     );
   };
@@ -940,7 +1223,13 @@ export default function CompositeWorkspace() {
   // ============================================================
 
   return (
-    <div className="flex-1 flex flex-col bg-ink-900 overflow-hidden">
+    <div className="flex-1 flex flex-col bg-ink-900 overflow-y-auto">
+      {/* Brush cursor circle — fixed-positioned, updated via ref */}
+      <div
+        ref={brushCursorRef}
+        className="fixed pointer-events-none rounded-full border-2 border-white/80"
+        style={{ display: "none", zIndex: 9999, boxSizing: "border-box" }}
+      />
       {/* Hidden rendering iframes — off-screen so WebGL context stays alive */}
       {currentStep === 3 && (
         <>
@@ -981,14 +1270,14 @@ export default function CompositeWorkspace() {
       )}
 
       {currentStep === 3 && (
-        <div className="flex-1 grid grid-cols-[380px_1fr] overflow-hidden">
+        <div className="flex-1 flex overflow-hidden">
           {/* LEFT PANEL */}
-          <aside className="bg-ink-800 border-r border-ink-600 flex flex-col overflow-hidden">
+          <aside className="w-[380px] shrink-0 bg-ink-800 border-r border-ink-600 flex flex-col overflow-hidden">
             <div className="px-4 py-3 border-b border-ink-600 flex items-center gap-2 shrink-0">
-              <button type="button" onClick={() => setCurrentStep(2)} className="text-xs text-ink-300 hover:text-ink-100 transition">
+              <button type="button" onClick={() => setCurrentStep(2)} className="text-xs text-ink-200 hover:text-ink-100 transition">
                 ← Back
               </button>
-              <span className="text-xs text-ink-400">Edit & Composite</span>
+              <span className="text-xs text-ink-100">Edit & Composite</span>
             </div>
 
             <div className="flex-1 p-4 space-y-2 overflow-y-auto">
@@ -1010,7 +1299,7 @@ export default function CompositeWorkspace() {
                     <AddLayerButton count={bgLayers.length} onClick={() => setBgShowPresetModal(true)} />
                     {bgActiveLayer && (
                       <div className="mt-4">
-                        <p className="text-[11px] uppercase tracking-wider text-ink-300 mb-2">Fine Tuning</p>
+                        <p className="text-[11px] uppercase tracking-wider text-ink-200 mb-2">Fine Tuning</p>
                         <FineTuningPanel
                           key={bgActiveLayer.id}
                           preset={PRESETS_BY_ID[bgActiveLayer.preset]}
@@ -1050,11 +1339,21 @@ export default function CompositeWorkspace() {
                     onRename={(name) => dispatchSubjects({ type: "rename", id: subj.id, name })}
                     onRemove={() => {
                       subjectOffscreens.current.delete(subj.id);
+                      subjectOriginalAlphas.current.delete(subj.id);
+                      subjectCurrentAlphas.current.delete(subj.id);
                       renderQueueRef.current = renderQueueRef.current.filter((qid) => qid !== subj.id);
+                      if (maskEditRef.current?.subjectId === subj.id) {
+                        maskEditRef.current = null;
+                        brushPainting.current = false;
+                        if (brushCursorRef.current) brushCursorRef.current.style.display = "none";
+                        setMaskEditUI(null);
+                      }
                       dispatchSubjects({ type: "remove", id: subj.id });
                     }}
                     onLayerAction={(action) => dispatchSubjects({ type: "layer", id: subj.id, action })}
                     canRemove={subjects.length > 1}
+                    onEditMask={() => enterMaskEdit(subj.id)}
+                    isMaskEditing={maskEditUI?.subjectId === subj.id}
                   />
                 ))}
               </div>
@@ -1062,6 +1361,23 @@ export default function CompositeWorkspace() {
 
             {/* Export */}
             <div className="p-4 border-t border-ink-600 shrink-0">
+              <div role="group" aria-label="Export format" className="flex gap-1 mb-2">
+                {(["webp", "jpeg", "png"] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    type="button"
+                    onClick={() => { setExportFormat(fmt); setExportUrl(null); setExportError(null); }}
+                    className={[
+                      "flex-1 text-xs uppercase py-1.5 rounded-md border transition",
+                      exportFormat === fmt
+                        ? "border-accent-500 bg-ink-700 text-white"
+                        : "border-ink-600 bg-ink-700/60 text-ink-200 hover:border-ink-400",
+                    ].join(" ")}
+                  >
+                    {fmt}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 disabled={!hasComposite || exporting}
@@ -1072,17 +1388,21 @@ export default function CompositeWorkspace() {
               </button>
               {exportError && <p className="text-xs text-red-400 mt-2">{exportError}</p>}
               {exportUrl && (
-                <a href={exportUrl} download className="block mt-2 text-xs text-accent-400 underline break-all">
-                  Download: composite.webp
+                <a
+                  href={exportUrl}
+                  download={`composite.${exportFormat === "jpeg" ? "jpg" : exportFormat}`}
+                  className="block mt-2 text-xs text-accent-400 underline break-all"
+                >
+                  Download: composite.{exportFormat === "jpeg" ? "jpg" : exportFormat}
                 </a>
               )}
             </div>
           </aside>
 
           {/* RIGHT PANEL — composite preview */}
-          <section className="bg-ink-900 flex flex-col overflow-hidden">
+          <section className="flex-1 min-w-0 bg-ink-900 flex flex-col overflow-hidden">
             <div className="border-b border-ink-600 px-6 py-3 flex items-center justify-between shrink-0">
-              <span className="text-xs uppercase tracking-wider text-ink-300">Composite Preview</span>
+              <span className="text-xs uppercase tracking-wider text-ink-200">Composite Preview</span>
               {activeSubject && (
                 <div className="flex items-center gap-4">
                   <label className="flex items-center gap-2 text-xs text-ink-200">
@@ -1095,7 +1415,7 @@ export default function CompositeWorkspace() {
                     />
                     <span className="tabular-nums w-8 text-right">{Math.round(activeSubject.scale * 100)}%</span>
                   </label>
-                  <button type="button" onClick={resetActiveSubjectPosition} className="text-xs text-ink-300 hover:text-ink-100 transition">
+                  <button type="button" onClick={resetActiveSubjectPosition} className="text-xs text-ink-200 hover:text-ink-100 transition">
                     Reset Position
                   </button>
                 </div>
@@ -1103,14 +1423,29 @@ export default function CompositeWorkspace() {
             </div>
 
             <div className="flex-1 relative overflow-hidden flex items-center justify-center bg-[radial-gradient(ellipse_at_center,_#1a1a20_0%,_#0b0b0d_70%)]">
+              {maskEditUI && (
+                <BrushToolbar
+                  mode={maskEditUI.mode}
+                  brushSize={maskEditUI.brushSize}
+                  brushHardness={maskEditUI.brushHardness}
+                  canUndo={maskEditUI.canUndo}
+                  canRedo={maskEditUI.canRedo}
+                  onModeChange={setMaskEditMode}
+                  onSizeChange={setMaskBrushSize}
+                  onHardnessChange={setMaskBrushHardness}
+                  onUndo={maskUndo}
+                  onRedo={maskRedo}
+                  onDone={exitMaskEdit}
+                />
+              )}
               <canvas
                 ref={compositeCanvasRef}
                 className={hasComposite ? "max-w-full max-h-full object-contain select-none" : "hidden"}
-                style={{ cursor: activeSubject ? "grab" : "default" }}
+                style={{ cursor: maskEditUI ? "none" : (activeSubject ? "grab" : "default") }}
                 onMouseDown={onPreviewMouseDown}
                 onMouseMove={onPreviewMouseMove}
                 onMouseUp={onPreviewMouseUp}
-                onMouseLeave={onPreviewMouseUp}
+                onMouseLeave={onPreviewMouseLeave}
               />
               {!hasComposite && (
                 <div className="flex flex-col items-center gap-3 text-center pointer-events-none">
@@ -1119,7 +1454,7 @@ export default function CompositeWorkspace() {
                     <circle cx="8.5" cy="8.5" r="1.5"/>
                     <polyline points="21 15 16 10 5 21"/>
                   </svg>
-                  <p className="text-sm text-ink-300">Rendering composite…</p>
+                  <p className="text-sm text-ink-200">Rendering composite…</p>
                 </div>
               )}
             </div>
@@ -1153,11 +1488,78 @@ function layerMsg(l: FilterLayer) {
 }
 
 // ============================================================
+// Brush Toolbar — floating overlay in edit mode
+// ============================================================
+
+function BrushToolbar({
+  mode, brushSize, brushHardness, canUndo, canRedo,
+  onModeChange, onSizeChange, onHardnessChange, onUndo, onRedo, onDone,
+}: {
+  mode: "erase" | "restore";
+  brushSize: number;
+  brushHardness: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  onModeChange: (m: "erase" | "restore") => void;
+  onSizeChange: (v: number) => void;
+  onHardnessChange: (v: number) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-ink-800/95 border border-ink-600 rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm select-none">
+      <div className="flex gap-1">
+        {(["erase", "restore"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onModeChange(m)}
+            className={["text-xs px-2.5 py-1 rounded border capitalize transition",
+              mode === m ? "bg-accent-500/20 border-accent-500 text-accent-400" : "border-ink-500 text-ink-200 hover:text-ink-100",
+            ].join(" ")}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+      <div className="w-px h-5 bg-ink-600" />
+      <label className="flex items-center gap-2 text-xs text-ink-200">
+        Size
+        <input type="range" min={1} max={100} step={1} value={brushSize} onChange={(e) => onSizeChange(Number(e.target.value))} className="w-20" />
+        <span className="tabular-nums w-6 text-right">{brushSize}</span>
+      </label>
+      <label className="flex items-center gap-2 text-xs text-ink-200">
+        Hardness
+        <input type="range" min={0} max={100} step={1} value={brushHardness} onChange={(e) => onHardnessChange(Number(e.target.value))} className="w-20" />
+        <span className="tabular-nums w-6 text-right">{brushHardness}</span>
+      </label>
+      <div className="w-px h-5 bg-ink-600" />
+      <div className="flex gap-1">
+        <button type="button" disabled={!canUndo} onClick={onUndo} title="Undo (Cmd+Z)"
+          className="text-sm text-ink-200 hover:text-ink-100 disabled:opacity-30 disabled:cursor-not-allowed transition px-1">
+          ←
+        </button>
+        <button type="button" disabled={!canRedo} onClick={onRedo} title="Redo (Cmd+Shift+Z)"
+          className="text-sm text-ink-200 hover:text-ink-100 disabled:opacity-30 disabled:cursor-not-allowed transition px-1">
+          →
+        </button>
+      </div>
+      <div className="w-px h-5 bg-ink-600" />
+      <button type="button" onClick={onDone}
+        className="text-xs font-medium px-3 py-1 rounded bg-accent-500/20 border border-accent-500/60 text-accent-400 hover:bg-accent-500/30 transition">
+        Done
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
 // Subject Panel — per-subject collapsible layer editor
 // ============================================================
 
 function SubjectPanel({
-  subject, isActive, onActivate, onRename, onRemove, onLayerAction, canRemove,
+  subject, isActive, onActivate, onRename, onRemove, onLayerAction, canRemove, onEditMask, isMaskEditing,
 }: {
   subject: CompositeSubject;
   isActive: boolean;
@@ -1166,6 +1568,8 @@ function SubjectPanel({
   onRemove: () => void;
   onLayerAction: (action: LayerAction) => void;
   canRemove: boolean;
+  onEditMask: () => void;
+  isMaskEditing: boolean;
 }) {
   const [open, setOpen]               = useState(true);
   const [tab, setTab]                 = useState<"layers" | "curves">("layers");
@@ -1226,6 +1630,20 @@ function SubjectPanel({
             {subject.layers.length}
           </span>
         )}
+        {!renaming && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onEditMask(); }}
+            className={["text-[10px] font-medium px-1.5 py-0.5 rounded border transition shrink-0",
+              isMaskEditing
+                ? "border-white text-white bg-white/10"
+                : "border-ink-500 text-ink-200 hover:text-ink-100 hover:border-ink-300",
+            ].join(" ")}
+            title="Edit mask with brush"
+          >
+            Edit Mask
+          </button>
+        )}
         {canRemove && !renaming && (
           confirmRemove ? (
             <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -1234,13 +1652,13 @@ function SubjectPanel({
                 Delete
               </button>
               <button type="button" onClick={() => setConfirmRemove(false)}
-                className="text-[10px] text-ink-300 hover:text-ink-100 transition">
+                className="text-[10px] text-ink-200 hover:text-ink-100 transition">
                 Cancel
               </button>
             </div>
           ) : (
             <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmRemove(true); }}
-              className="text-ink-400 hover:text-red-400 transition shrink-0" title="Remove subject">
+              className="text-ink-100 hover:text-red-400 transition shrink-0" title="Remove subject">
               <TrashIcon />
             </button>
           )
@@ -1269,7 +1687,7 @@ function SubjectPanel({
               <AddLayerButton count={subject.layers.length} onClick={() => setShowModal(true)} />
               {activeLayer && (
                 <div className="mt-4">
-                  <p className="text-[11px] uppercase tracking-wider text-ink-300 mb-2">Fine Tuning</p>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-200 mb-2">Fine Tuning</p>
                   <FineTuningPanel
                     key={activeLayer.id}
                     preset={PRESETS_BY_ID[activeLayer.preset]}
@@ -1346,7 +1764,7 @@ function AddSubjectOverlay({
 function StepIndicator({ currentStep }: { currentStep: 1 | 2 | 3 }) {
   const steps = ["Upload Background", "Upload Subject", "Edit & Composite"];
   return (
-    <div className="shrink-0 flex items-center justify-center gap-3 py-4 border-b border-ink-700 bg-ink-800">
+    <div className="shrink-0 sticky top-0 z-10 flex items-center justify-center gap-3 py-4 border-b border-ink-700 bg-ink-800">
       {steps.map((label, i) => {
         const n = (i + 1) as 1 | 2 | 3;
         const active = n === currentStep;
@@ -1356,10 +1774,10 @@ function StepIndicator({ currentStep }: { currentStep: 1 | 2 | 3 }) {
             {i > 0 && <span className="w-8 h-px bg-ink-600" />}
             <div className="flex items-center gap-2">
               <span className={["w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition",
-                active ? "bg-accent-500 text-white" : done ? "bg-ink-600 text-ink-300" : "bg-ink-700 text-ink-500"].join(" ")}>
+                active ? "bg-accent-500 text-white" : done ? "bg-ink-600 text-ink-200" : "bg-ink-700 text-ink-500"].join(" ")}>
                 {done ? "✓" : n}
               </span>
-              <span className={["text-xs font-medium", active ? "text-ink-100" : "text-ink-400"].join(" ")}>{label}</span>
+              <span className={["text-xs font-medium", active ? "text-ink-100" : "text-ink-200"].join(" ")}>{label}</span>
             </div>
           </div>
         );
@@ -1385,7 +1803,7 @@ function Step1({
     <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8">
       <div className="w-full max-w-md">
         <h2 className="text-sm font-semibold text-ink-100 mb-1 text-center">Upload Background Image</h2>
-        <p className="text-xs text-ink-300 mb-6 text-center">This will be the base of your composite. Supports JPEG, PNG, WebP.</p>
+        <p className="text-xs text-ink-200 mb-6 text-center">This will be the base of your composite. Supports JPEG, PNG, WebP.</p>
         <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={onUpload} className="hidden" />
         {bgPath ? (
           <div className="rounded-xl border border-ink-600 bg-ink-800 p-4 flex flex-col items-center gap-3">
@@ -1402,7 +1820,7 @@ function Step1({
         ) : (
           <button
             type="button" onClick={() => fileRef.current?.click()} disabled={uploading}
-            className="w-full rounded-xl border-2 border-dashed border-ink-600 hover:border-ink-400 bg-ink-800/50 text-ink-300 hover:text-ink-100 py-12 flex flex-col items-center gap-3 transition disabled:opacity-60"
+            className="w-full rounded-xl border-2 border-dashed border-ink-600 hover:border-ink-400 bg-ink-800/50 text-ink-200 hover:text-ink-100 py-12 flex flex-col items-center gap-3 transition disabled:opacity-60"
           >
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -1520,7 +1938,7 @@ function Step2({
           )}
           <div>
             <h2 className="text-sm font-semibold text-ink-100 mb-0.5">Upload &amp; Select Subject</h2>
-            <p className="text-xs text-ink-300">{subModeLabel[mode]}</p>
+            <p className="text-xs text-ink-200">{subModeLabel[mode]}</p>
           </div>
         </div>
 
@@ -1530,7 +1948,7 @@ function Step2({
         {mode === "upload" && (
           <button
             type="button" onClick={() => fileRef.current?.click()}
-            className="w-full rounded-xl border-2 border-dashed border-ink-600 hover:border-ink-400 bg-ink-800/50 text-ink-300 hover:text-ink-100 py-12 flex flex-col items-center gap-3 transition"
+            className="w-full rounded-xl border-2 border-dashed border-ink-600 hover:border-ink-400 bg-ink-800/50 text-ink-200 hover:text-ink-100 py-12 flex flex-col items-center gap-3 transition"
           >
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -1544,7 +1962,7 @@ function Step2({
         {mode === "selecting" && origBlobUrl && (
           <div className="space-y-3">
             <SelectionCanvas imageSrc={origBlobUrl} box={selBox} onBoxChange={setSelBox} />
-            <p className="text-xs text-ink-400">Click and drag to draw a selection. Drag the handles to resize it.</p>
+            <p className="text-xs text-ink-100">Click and drag to draw a selection. Drag the handles to resize it.</p>
             <div className="flex gap-2">
               <button type="button" onClick={() => fileRef.current?.click()} className="flex-1 rounded-md bg-ink-600 text-ink-100 text-xs py-2 hover:bg-ink-500 transition">
                 Replace Image
@@ -1566,7 +1984,7 @@ function Step2({
           <div className="rounded-xl border border-ink-600 bg-ink-800 p-8 flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-accent-500 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm text-ink-200">Removing background…</p>
-            <p className="text-xs text-ink-400">This may take a moment on first run.</p>
+            <p className="text-xs text-ink-100">This may take a moment on first run.</p>
           </div>
         )}
 
@@ -1592,7 +2010,7 @@ function Step2({
             >
               <img src={isolatedBlobUrl} alt="Isolated subject" className="max-h-80 max-w-full object-contain" />
             </div>
-            <p className="text-xs text-ink-300 text-center">Background removed successfully.</p>
+            <p className="text-xs text-ink-200 text-center">Background removed successfully.</p>
             <div className="flex gap-2 w-full">
               <button type="button" onClick={handleRedraw} className="flex-1 rounded-md bg-ink-600 text-ink-100 text-xs py-2 hover:bg-ink-500 transition">
                 Redraw Selection
@@ -1608,7 +2026,7 @@ function Step2({
           </div>
         )}
 
-        <button type="button" onClick={onBack} className="mt-5 w-full text-xs text-ink-400 hover:text-ink-100 transition">
+        <button type="button" onClick={onBack} className="mt-5 w-full text-xs text-ink-200 hover:text-ink-100 transition">
           {backLabel}
         </button>
       </div>
@@ -1646,7 +2064,7 @@ function StackTabs({ tab, onTabChange }: { tab: "layers" | "curves"; onTabChange
     <div className="flex bg-ink-700 rounded-md p-0.5 mb-3 gap-0.5">
       {(["layers", "curves"] as const).map((t) => (
         <button key={t} type="button" onClick={() => onTabChange(t)}
-          className={["flex-1 text-xs py-1 rounded transition capitalize", tab === t ? "bg-ink-500 text-white font-medium" : "text-ink-300 hover:text-white"].join(" ")}>
+          className={["flex-1 text-xs py-1 rounded transition capitalize", tab === t ? "bg-ink-500 text-white font-medium" : "text-ink-200 hover:text-white"].join(" ")}>
           {t.charAt(0).toUpperCase() + t.slice(1)}
         </button>
       ))}
@@ -1657,7 +2075,7 @@ function StackTabs({ tab, onTabChange }: { tab: "layers" | "curves"; onTabChange
 function AddLayerButton({ count, onClick }: { count: number; onClick: () => void }) {
   return (
     <button type="button" disabled={count >= 5} onClick={onClick}
-      className="w-full mt-2 rounded-md border border-dashed border-ink-500 text-xs text-ink-300 py-2 hover:border-ink-400 hover:text-ink-100 disabled:opacity-40 disabled:cursor-not-allowed transition">
+      className="w-full mt-2 rounded-md border border-dashed border-ink-500 text-xs text-ink-200 py-2 hover:border-ink-400 hover:text-ink-100 disabled:opacity-40 disabled:cursor-not-allowed transition">
       + Add Layer{count >= 5 ? " (max 5)" : ""}
     </button>
   );
@@ -1732,7 +2150,7 @@ function LayerCard({
           <GripIcon />
         </span>
         <button type="button" onClick={(e) => { e.stopPropagation(); onToggleVisible(); }}
-          className={["shrink-0 transition-colors", layer.visible ? "text-ink-200 hover:text-ink-100" : "text-ink-500 hover:text-ink-300"].join(" ")}>
+          className={["shrink-0 transition-colors", layer.visible ? "text-ink-200 hover:text-ink-100" : "text-ink-500 hover:text-ink-200"].join(" ")}>
           <EyeIcon open={layer.visible} />
         </button>
         <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">{preset.name}</span>
@@ -1740,7 +2158,7 @@ function LayerCard({
           {preset.pro && <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
           <button type="button" onClick={(e) => { e.stopPropagation(); setMaskOpen((v) => !v); }}
             className={["text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
-              maskOpen || isMaskActive(layer.mask) ? "border-accent-500 text-accent-400 bg-accent-500/10" : "border-ink-400 text-ink-300 hover:text-white hover:border-ink-300"].join(" ")}>
+              maskOpen || isMaskActive(layer.mask) ? "border-accent-500 text-accent-400 bg-accent-500/10" : "border-ink-400 text-ink-200 hover:text-white hover:border-ink-300"].join(" ")}>
             MASK
           </button>
           <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(); }} className="text-ink-200 hover:text-red-400 transition-colors">
@@ -1826,20 +2244,20 @@ function MaskPanel({ mask, onUpdate }: { mask: LayerMask; onUpdate: (mask: Layer
           <div className={["px-2 pb-2 pt-1 space-y-2 border-t border-ink-600 bg-ink-700/20", !mask.luminosity.enabled ? "opacity-40 pointer-events-none" : ""].join(" ")}>
             <div>
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Range</span>
+                <span className="text-[10px] text-ink-200">Range</span>
                 <span className="text-[10px] text-ink-200 tabular-nums">{mask.luminosity.min}–{mask.luminosity.max}</span>
               </div>
               <DualRangeSlider min={0} max={255} low={mask.luminosity.min} high={mask.luminosity.max} onChangeLow={(min) => setLum({ min })} onChangeHigh={(max) => setLum({ max })} />
             </div>
             <label className="block">
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Smoothness</span>
+                <span className="text-[10px] text-ink-200">Smoothness</span>
                 <span className="text-[10px] text-ink-200 tabular-nums">{mask.luminosity.smoothness}</span>
               </div>
               <input type="range" min={0} max={100} step={1} value={mask.luminosity.smoothness} onChange={(e) => setLum({ smoothness: Number(e.target.value) })} className="w-full" />
             </label>
             <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-[10px] text-ink-300">Invert</span>
+              <span className="text-[10px] text-ink-200">Invert</span>
               <input type="checkbox" checked={mask.luminosity.invert} onChange={(e) => setLum({ invert: e.target.checked })} className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500" />
             </label>
           </div>
@@ -1856,7 +2274,7 @@ function MaskPanel({ mask, onUpdate }: { mask: LayerMask; onUpdate: (mask: Layer
         {colorOpen && (
           <div className={["px-2 pb-2 pt-1 space-y-2 border-t border-ink-600 bg-ink-700/20", !mask.colorRange.enabled ? "opacity-40 pointer-events-none" : ""].join(" ")}>
             <div>
-              <span className="text-[10px] text-ink-300 block mb-1.5">Channels</span>
+              <span className="text-[10px] text-ink-200 block mb-1.5">Channels</span>
               <div className="flex flex-wrap gap-1">
                 {MASK_CHANNEL_DEFS.map(({ key, label, color }) => {
                   const isActive = activeChannels.includes(key);
@@ -1879,20 +2297,20 @@ function MaskPanel({ mask, onUpdate }: { mask: LayerMask; onUpdate: (mask: Layer
               </div>
             </div>
             {chSettings === null ? (
-              <p className="text-[10px] text-ink-400 text-center py-1">Select a channel to adjust its settings.</p>
+              <p className="text-[10px] text-ink-100 text-center py-1">Select a channel to adjust its settings.</p>
             ) : (
               <>
                 <p className="text-[10px] font-medium text-ink-200">{focusedCh!.charAt(0).toUpperCase() + focusedCh!.slice(1)}</p>
                 <label className="block">
-                  <div className="flex items-baseline justify-between mb-1"><span className="text-[10px] text-ink-300">Expansion</span><span className="text-[10px] text-ink-200 tabular-nums">{chSettings.expansion}</span></div>
+                  <div className="flex items-baseline justify-between mb-1"><span className="text-[10px] text-ink-200">Expansion</span><span className="text-[10px] text-ink-200 tabular-nums">{chSettings.expansion}</span></div>
                   <input type="range" min={0} max={100} step={1} value={chSettings.expansion} onChange={(e) => setChannelSetting({ expansion: Number(e.target.value) })} className="w-full" />
                 </label>
                 <label className="block">
-                  <div className="flex items-baseline justify-between mb-1"><span className="text-[10px] text-ink-300">Smoothness</span><span className="text-[10px] text-ink-200 tabular-nums">{chSettings.smoothness}</span></div>
+                  <div className="flex items-baseline justify-between mb-1"><span className="text-[10px] text-ink-200">Smoothness</span><span className="text-[10px] text-ink-200 tabular-nums">{chSettings.smoothness}</span></div>
                   <input type="range" min={0} max={100} step={1} value={chSettings.smoothness} onChange={(e) => setChannelSetting({ smoothness: Number(e.target.value) })} className="w-full" />
                 </label>
                 <label className="flex items-center justify-between cursor-pointer">
-                  <span className="text-[10px] text-ink-300">Invert</span>
+                  <span className="text-[10px] text-ink-200">Invert</span>
                   <input type="checkbox" checked={chSettings.invert} onChange={(e) => setChannelSetting({ invert: e.target.checked })} className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500" />
                 </label>
               </>
@@ -2058,7 +2476,7 @@ function PresetModal({ onClose, onSelect }: { onClose: () => void; onSelect: (id
             <button key={p.id} type="button" onClick={() => onSelect(p.id)} className="relative text-left rounded-md border border-ink-600 bg-ink-700/60 hover:border-accent-500 px-3 py-2 transition">
               {p.pro && <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
-              <div className="text-[11px] text-ink-300 mt-0.5 leading-snug">{p.description}</div>
+              <div className="text-[11px] text-ink-200 mt-0.5 leading-snug">{p.description}</div>
             </button>
           ))}
         </div>
