@@ -12,10 +12,11 @@ export type PresetId =
   | "studio-lighting"
   | "lut-kodak-2383"
   | "lut-bleach-bypass"
-  | "lut-teal-orange-pro"
+  | "split-tone-pro"
   | "lut-fuji-3510"
   | "lut-cool-fade"
-  | "lut-warm-print";
+  | "lut-warm-print"
+  | "focal-blur";
 
 export type Control =
   | {
@@ -56,8 +57,9 @@ export interface PresetDef {
   name: string;
   description: string;
   controls: Control[];
-  // Rendering path: "canvas" (SVG + Canvas 2D, default) or "lut" (WebGL LUT).
-  type?: "canvas" | "lut";
+  // Rendering path: "canvas" (SVG + Canvas 2D, default), "lut" (WebGL LUT), or
+  // "webgl" (raw source + a custom WebGL effect pass, e.g. Focal Blur).
+  type?: "canvas" | "lut" | "webgl";
   // True if the preset uses the WebGL layer (LUT presets or canvas presets
   // that need GPU post).
   webgl?: boolean;
@@ -83,13 +85,6 @@ const pct = (
 
 // Optional WebGL-enhancement controls added to existing Canvas 2D presets.
 // All marked pro:true so they appear under the PRO ENHANCEMENTS divider.
-const HQ_GRAIN_TOGGLE: Control = {
-  kind: "toggle",
-  key: "hqGrain",
-  label: "HQ Grain (GPU)",
-  default: false,
-  pro: true,
-};
 const LENS_ABERRATION_SLIDER: Control = {
   kind: "slider",
   key: "lensAberration",
@@ -100,17 +95,6 @@ const LENS_ABERRATION_SLIDER: Control = {
   default: 0,
   pro: true,
 };
-const LENS_DISTORTION_SLIDER: Control = {
-  kind: "slider",
-  key: "lensDistortion",
-  label: "Lens Distortion",
-  min: -50,
-  max: 50,
-  step: 1,
-  default: 0,
-  pro: true,
-};
-
 // Standard controls shared by every LUT preset.
 const lutControls = (intensityDefault = 85): Control[] => [
   pct("intensity", "Intensity", intensityDefault),
@@ -129,15 +113,15 @@ export const PRESETS: PresetDef[] = [
         kind: "select",
         key: "grainSize",
         label: "Grain Size",
-        default: "medium",
+        default: "none",
         options: [
+          { value: "none", label: "None" },
           { value: "fine", label: "Fine" },
           { value: "medium", label: "Medium" },
           { value: "coarse", label: "Coarse" },
         ],
       },
       pct("vignetteStrength", "Vignette", 40),
-      HQ_GRAIN_TOGGLE,
     ],
   },
   {
@@ -149,7 +133,6 @@ export const PRESETS: PresetDef[] = [
       pct("tealOrangeStrength", "Teal/Orange", 65),
       { kind: "toggle", key: "letterbox", label: "Letterbox", default: false },
       pct("bloomAmount", "Bloom", 35),
-      HQ_GRAIN_TOGGLE,
       LENS_ABERRATION_SLIDER,
     ],
   },
@@ -161,7 +144,6 @@ export const PRESETS: PresetDef[] = [
       pct("intensity", "Intensity", 70),
       pct("fadeAmount", "Fade", 55),
       pct("coolShift", "Cool Shift", 40),
-      HQ_GRAIN_TOGGLE,
     ],
   },
   {
@@ -196,7 +178,6 @@ export const PRESETS: PresetDef[] = [
         label: "Highlight Tone",
         default: "#f5ecd9",
       },
-      HQ_GRAIN_TOGGLE,
     ],
   },
   {
@@ -241,7 +222,6 @@ export const PRESETS: PresetDef[] = [
       pct("lightY", "Light Y", 40),
       pct("lightRadius", "Light Radius", 55),
       pct("lightIntensity", "Light Power", 55),
-      LENS_DISTORTION_SLIDER,
     ],
   },
 
@@ -265,13 +245,29 @@ export const PRESETS: PresetDef[] = [
     controls: lutControls(80),
   },
   {
-    id: "lut-teal-orange-pro",
-    name: "Teal/Orange Pro",
-    description: "Heavy cinematic grade.",
+    id: "split-tone-pro",
+    name: "Split Tone Pro",
+    description: "Hue-aware shadow/highlight grade.",
     type: "lut",
     webgl: true,
     pro: true,
-    controls: lutControls(80),
+    controls: [
+      {
+        kind: "select",
+        key: "pair",
+        label: "Color Pair",
+        default: "teal-orange",
+        options: [
+          { value: "teal-orange",   label: "Teal / Orange"   },
+          { value: "blue-gold",     label: "Blue / Gold"     },
+          { value: "green-magenta", label: "Green / Magenta" },
+          { value: "cyan-red",      label: "Cyan / Red"      },
+          { value: "purple-yellow", label: "Purple / Yellow" },
+        ],
+      },
+      pct("strength", "Split Strength", 50),
+      ...lutControls(80),
+    ],
   },
   {
     id: "lut-fuji-3510",
@@ -299,6 +295,20 @@ export const PRESETS: PresetDef[] = [
     webgl: true,
     pro: true,
     controls: lutControls(85),
+  },
+
+  // ---- Focal Blur (WebGL) ----
+  // Zoom/radial motion blur radiating from a user-defined focal region. The
+  // focal point and radius come from the bounding box drawn on the preview
+  // panel, not from sliders — so the only control is Intensity.
+  {
+    id: "focal-blur",
+    name: "Focal Blur",
+    description: "Zoom blur radiating from a focal region.",
+    type: "webgl",
+    webgl: true,
+    pro: true,
+    controls: [pct("intensity", "Intensity", 50)],
   },
 ];
 

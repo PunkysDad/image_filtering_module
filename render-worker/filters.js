@@ -743,7 +743,9 @@
         const { width: w, height: h, seed } = info;
         const I = pct(p.intensity, 70);
         drawHalation(ctx, w, h, I * 0.7, seed);
-        drawLumaCoupledGrain(ctx, w, h, I * 0.9, p.grainSize || "medium", seed);
+        if (p.grainSize && p.grainSize !== "none") {
+          drawLumaCoupledGrain(ctx, w, h, I * 0.9, p.grainSize || "medium", seed);
+        }
         drawVignette(ctx, w, h, pct(p.vignetteStrength, 40) * 0.9, 0.45);
       },
     },
@@ -974,6 +976,16 @@
         return cachedLut("warm-print", lutWarmPrint);
       },
     },
+
+    // ---- Focal Blur (WebGL) ----
+    // No SVG / Canvas 2D pass — renderScene draws the raw source and the WebGL
+    // layer applies a zoom/radial motion blur around the focal region defined
+    // by the bounding box on the preview panel.
+    "focal-blur": {
+      id: "focal-blur",
+      type: "webgl",
+      webgl: true,
+    },
   };
 
   // ---------- WebGL effect list builder ----------
@@ -982,6 +994,18 @@
   // window.WebGLRenderer.apply. Empty array → no WebGL pass.
   function buildWebGlEffects(def, p, info) {
     const effects = [];
+
+    if (def.type === "webgl" && def.id === "focal-blur") {
+      effects.push({
+        type: "focalBlur",
+        params: {
+          focalCenter: { x: p.focalX ?? 0.5, y: p.focalY ?? 0.5 },
+          focalRadius: p.focalRadius ?? 0.3,
+          intensity: pct(p.intensity, 50),
+        },
+      });
+      return effects;
+    }
 
     if (def.type === "lut" && typeof def.generateLUT === "function") {
       effects.push({
@@ -992,18 +1016,7 @@
           intensity: pct(p.intensity, 85),
         },
       });
-      // LUT presets expose their own grain + aberration sliders.
-      const grainAmt = pct(p.grain, 20);
-      if (grainAmt > 0) {
-        effects.push({
-          type: "hqGrain",
-          params: {
-            amount: grainAmt,
-            size: 1.5,
-            seed: info.seed,
-          },
-        });
-      }
+      // LUT presets expose their own aberration slider.
       const abr = pct(p.aberration, 0);
       if (abr > 0) {
         effects.push({
@@ -1015,22 +1028,10 @@
     }
 
     // Canvas 2D preset with optional pro enhancements.
-    if (p.hqGrain === true) {
-      effects.push({
-        type: "hqGrain",
-        params: { amount: 0.25, size: 1.5, seed: info.seed },
-      });
-    }
     if (typeof p.lensAberration === "number" && p.lensAberration > 0) {
       effects.push({
         type: "chromaticAberration",
         params: { amount: p.lensAberration / 100, falloffEdge: 1.0 },
-      });
-    }
-    if (typeof p.lensDistortion === "number" && p.lensDistortion !== 0) {
-      effects.push({
-        type: "lensDistortion",
-        params: { amount: p.lensDistortion / 100, zoom: 0.12 },
       });
     }
     return effects;
@@ -1040,9 +1041,7 @@
     if (def.webgl === true) return true;
     return Boolean(
       p &&
-        (p.hqGrain === true ||
-          (typeof p.lensAberration === "number" && p.lensAberration > 0) ||
-          (typeof p.lensDistortion === "number" && p.lensDistortion !== 0)),
+        (typeof p.lensAberration === "number" && p.lensAberration > 0),
     );
   }
 
@@ -1074,8 +1073,8 @@
     const p = params || {};
     const info = { width: w, height: h, seed: (seed >>> 0) || 1 };
 
-    if (def.type === "lut") {
-      // LUT path: source pixels only — WebGL colour-grades them.
+    if (def.type === "lut" || def.type === "webgl") {
+      // LUT / WebGL path: source pixels only — the WebGL layer transforms them.
       ctx.drawImage(sourceImg, 0, 0, w, h);
     } else {
       // Add this layer's filter to the shared svgDefs host. Multiple layers
@@ -1106,6 +1105,11 @@
           console.warn("[filters] WebGL pass failed:", err && err.message);
         }
       }
+    }
+
+    if (def.type === "lut") {
+      const grainAmt = pct(p.grain, 20);
+      if (grainAmt > 0) drawLumaCoupledGrain(ctx, w, h, grainAmt, "fine", info.seed);
     }
   }
 

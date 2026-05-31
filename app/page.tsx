@@ -16,12 +16,36 @@ import {
   PresetId,
   defaultParams,
 } from "@/lib/filters";
+import AiTutor from "@/components/AiTutor";
+import CompositeWorkspace from "@/components/CompositeWorkspace";
+import { useAuth } from "@/lib/auth-context";
+import AuthModal, { AuthMode } from "@/components/AuthModal";
 
 type Params = Record<string, string | number | boolean>;
 
-type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
+export type MaskChannel = "reds" | "oranges" | "yellows" | "greens" | "cyans" | "blues" | "magentas";
 
-type LayerMask = {
+export type MaskChannelSettings = {
+  expansion: number;  // 0–100
+  smoothness: number; // 0–100
+  invert: boolean;
+};
+
+const DEFAULT_CHANNEL_SETTINGS: MaskChannelSettings = { expansion: 50, smoothness: 50, invert: false };
+
+function defaultChannels(): Record<MaskChannel, MaskChannelSettings> {
+  return {
+    reds:     { ...DEFAULT_CHANNEL_SETTINGS },
+    oranges:  { ...DEFAULT_CHANNEL_SETTINGS },
+    yellows:  { ...DEFAULT_CHANNEL_SETTINGS },
+    greens:   { ...DEFAULT_CHANNEL_SETTINGS },
+    cyans:    { ...DEFAULT_CHANNEL_SETTINGS },
+    blues:    { ...DEFAULT_CHANNEL_SETTINGS },
+    magentas: { ...DEFAULT_CHANNEL_SETTINGS },
+  };
+}
+
+export type LayerMask = {
   luminosity: {
     enabled: boolean;
     min: number;
@@ -31,17 +55,16 @@ type LayerMask = {
   };
   colorRange: {
     enabled: boolean;
-    channel: MaskChannel | null;
-    expansion: number;
-    smoothness: number;
-    invert: boolean;
+    activeChannels: MaskChannel[];      // channels participating in the render
+    focusedChannel: MaskChannel | null; // UI-only: which channel's sliders are shown
+    channels: Record<MaskChannel, MaskChannelSettings>;
   };
 };
 
 function defaultMask(): LayerMask {
   return {
     luminosity: { enabled: false, min: 0, max: 255, smoothness: 50, invert: false },
-    colorRange:  { enabled: false, channel: null, expansion: 50, smoothness: 50, invert: false },
+    colorRange:  { enabled: false, activeChannels: [], focusedChannel: null, channels: defaultChannels() },
   };
 }
 
@@ -55,11 +78,11 @@ const MASK_CHANNEL_DEFS: { key: MaskChannel; label: string; color: string }[] = 
   { key: "magentas", label: "M", color: "#ff44cc" },
 ];
 
-type CurvePoint = [number, number]; // [input 0–255, output 0–255]
-type Curve = CurvePoint[];
-type CurveChannel = "rgb" | "r" | "g" | "b";
+export type CurvePoint = [number, number]; // [input 0–255, output 0–255]
+export type Curve = CurvePoint[];
+export type CurveChannel = "rgb" | "r" | "g" | "b";
 
-type LayerCurves = {
+export type LayerCurves = {
   rgb: Curve;
   r:   Curve;
   g:   Curve;
@@ -100,7 +123,8 @@ type LayerAction =
   | { type: "set-intensity"; id: string; intensity: number }
   | { type: "set-mask";   id: string; mask: LayerMask }
   | { type: "set-curves"; id: string; curves: LayerCurves }
-  | { type: "reorder"; from: number; to: number };
+  | { type: "reorder"; from: number; to: number }
+  | { type: "restore"; layers: FilterLayer[] };
 
 function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[] {
   switch (action.type) {
@@ -147,13 +171,15 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
       next.splice(action.to, 0, moved);
       return next;
     }
+    case "restore":
+      return action.layers;
     default:
       return state;
   }
 }
 
-type HslChannel = { hue: number; saturation: number; luminance: number };
-type HslState = {
+export type HslChannel = { hue: number; saturation: number; luminance: number };
+export type HslState = {
   reds: HslChannel;
   oranges: HslChannel;
   yellows: HslChannel;
@@ -192,28 +218,56 @@ function useDebouncedValue<T>(value: T, ms: number): T {
   return v;
 }
 
-const INITIAL_PRESET_ID: PresetId = "film-grain";
-const INITIAL_LAYER_ID = "initial";
+// Maps a layer to the payload sent to the renderer. Focal Blur stays inert
+// until the user clicks "Apply Blur" (which writes focalRadius onto the layer);
+// until then it renders with intensity 0 so simply adding the layer — or
+// positioning its box — never auto-applies a blur.
+function layerForRender(l: FilterLayer) {
+  const focalPending =
+    l.preset === "focal-blur" && typeof l.params.focalRadius !== "number";
+  return {
+    preset: l.preset,
+    visible: l.visible,
+    intensity: l.intensity,
+    params: focalPending ? { ...l.params, intensity: 0 } : l.params,
+    mask: l.mask,
+    curves: l.curves,
+  };
+}
+
+// The layer stack is persisted here before the auth flow starts, so it survives
+// the page reload that happens after email confirmation. The image itself is
+// never persisted — only the layer stack.
+const PENDING_LAYERS_KEY = "picmagiq_pending_layers";
+
+function saveLayerStackToStorage(layers: FilterLayer[]) {
+  try {
+    localStorage.setItem(PENDING_LAYERS_KEY, JSON.stringify(layers));
+  } catch {
+    // Ignore storage failures (quota exceeded / disabled).
+  }
+}
 
 export default function Dashboard() {
+  // Subscription state comes from AuthContext (Supabase profile.tier).
+  const { user, isPremium, isLoading: authLoading, signOut } = useAuth();
+  const [mainTab, setMainTab] = useState<"editor" | "composite">("editor");
+
+  // Auth modal, the export waiting on auth to finish, and the top-bar menu.
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
+  const [pendingExport, setPendingExport] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // Shown when a layer stack persisted before the auth flow is restored.
+  const [showRestoreBanner, setShowRestoreBanner] = useState(false);
+
   const [basePath, setBasePath] = useState<string | null>(null);
   const [overlayPath, setOverlayPath] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadingBase, setUploadingBase] = useState(false);
   const [uploadingOverlay, setUploadingOverlay] = useState(false);
 
-  const [layers, dispatch] = useReducer(layersReducer, undefined, () => [
-    {
-      id: INITIAL_LAYER_ID,
-      preset: INITIAL_PRESET_ID,
-      params: defaultParams(PRESETS_BY_ID[INITIAL_PRESET_ID]) as Params,
-      visible: true,
-      intensity: 100,
-      mask:   defaultMask(),
-      curves: defaultLayerCurves(),
-    },
-  ]);
-  const [activeLayerId, setActiveLayerId] = useState<string>(INITIAL_LAYER_ID);
+  const [layers, dispatch] = useReducer(layersReducer, []);
+  const [activeLayerId, setActiveLayerId] = useState<string>("");
   const [showPresetModal, setShowPresetModal] = useState(false);
 
   // Overlay image has its own independent preset (not part of the layer stack)
@@ -242,6 +296,7 @@ export default function Dashboard() {
 
   const [exporting, setExporting] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<"webp" | "jpeg" | "png">("webp");
   const [iframeReady, setIframeReady] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -253,13 +308,22 @@ export default function Dashboard() {
   const activeLayer =
     layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
 
-  // When active layer is removed, fall back to the last layer
+  // Focal Blur draws an interactive bounding box over the preview. At most one
+  // focal-blur layer can exist (enforced in the Add Layer picker). Keyed off
+  // activeLayerId (not the fallback activeLayer) so an explicit deselect
+  // (activeLayerId === "") reliably dims the box even when it is layer 0.
+  const focalLayer = layers.find((l) => l.preset === "focal-blur") ?? null;
+  const focalActive = !!focalLayer && activeLayerId === focalLayer.id;
+
+  // When the active layer is removed, fall back to the last layer. An explicit
+  // deselect (activeLayerId === "") is left alone so clicking outside the
+  // Focal Blur box can dim it without immediately re-selecting a layer.
   useEffect(() => {
     if (layers.length === 0) {
       setActiveLayerId("");
       return;
     }
-    if (!layers.find((l) => l.id === activeLayerId)) {
+    if (activeLayerId !== "" && !layers.find((l) => l.id === activeLayerId)) {
       setActiveLayerId(layers[layers.length - 1].id);
     }
   }, [layers, activeLayerId]);
@@ -286,14 +350,7 @@ export default function Dashboard() {
       {
         type: "render",
         imageUrl: basePath,
-        layers: layers.map((l) => ({
-          preset: l.preset,
-          visible: l.visible,
-          intensity: l.intensity,
-          params: l.params,
-          mask:   l.mask,
-          curves: l.curves,
-        })),
+        layers: layers.map(layerForRender),
         seed: 1,
         overlayImageUrl: overlayPath,
         overlayPreset: overlayPath ? overlayPresetId : null,
@@ -350,8 +407,11 @@ export default function Dashboard() {
         throw new Error(j.error || `Upload failed: ${res.status}`);
       }
       const json = (await res.json()) as { imagePath: string };
-      if (which === "base") setBasePath(json.imagePath);
-      else setOverlayPath(json.imagePath);
+      if (which === "base") {
+        setBasePath(json.imagePath);
+        // A fresh image makes the "settings were saved" banner obsolete.
+        setShowRestoreBanner(false);
+      } else setOverlayPath(json.imagePath);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -399,14 +459,8 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imagePath: basePath,
-          layers: layers.map((l) => ({
-            preset: l.preset,
-            visible: l.visible,
-            intensity: l.intensity,
-            params: l.params,
-            mask:   l.mask,
-            curves: l.curves,
-          })),
+          format: exportFormat,
+          layers: layers.map(layerForRender),
           seed: 1,
           overlayImagePath: overlayPath,
           overlayPreset: overlayPath ? overlayPresetId : null,
@@ -425,6 +479,13 @@ export default function Dashboard() {
       }
       const json = (await res.json()) as { downloadUrl: string };
       setDownloadUrl(json.downloadUrl);
+      // Safety: clear any persisted layer stack (covers signing in without a
+      // page reload). It is already cleared on restore.
+      try {
+        localStorage.removeItem(PENDING_LAYERS_KEY);
+      } catch {
+        // Ignore storage failures.
+      }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -439,12 +500,208 @@ export default function Dashboard() {
     setShowPresetModal(false);
   };
 
+  // Whether the current layer stack uses any Pro-tier preset.
+  const hasProLayers = layers.some((l) => PRESETS_BY_ID[l.preset]?.pro);
+
+  // ---- Export gate (reads auth state from AuthContext) ----
+  const handleExportClick = () => {
+    if (!basePath) return;
+    if (!user) {
+      // Unauthenticated → persist the layer stack so it survives the reload
+      // after email confirmation, then prompt account creation and resume.
+      saveLayerStackToStorage(layers);
+      setPendingExport(true);
+      setAuthMode("sign-up-prompt");
+      return;
+    }
+    if (!isPremium && hasProLayers) {
+      // Authenticated Basic user with Pro layers → this image cannot be exported.
+      setPendingExport(true);
+      setAuthMode("export-blocked");
+      return;
+    }
+    onExport(); // Premium, or Basic without Pro layers.
+  };
+
+  const handleAuthSuccess = () => {
+    // Close the modal; the effect below resumes any pending export once the
+    // session/profile have propagated through AuthContext.
+    setAuthMode(null);
+  };
+
+  const closeAuthModal = () => {
+    setAuthMode(null);
+    setPendingExport(false);
+  };
+
+  // Resume a pending export after auth (or an in-modal upgrade) completes.
+  useEffect(() => {
+    if (!pendingExport || authLoading || !user) return;
+    if (isPremium || !hasProLayers) {
+      setPendingExport(false);
+      setAuthMode(null);
+      onExport();
+    } else {
+      // Signed up as Basic but the image needs Pro features — keep it blocked.
+      setAuthMode("export-blocked");
+    }
+    // onExport is intentionally omitted (recreated each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingExport, authLoading, user, isPremium, hasProLayers]);
+
+  // On mount, restore a layer stack persisted before the auth flow (e.g. the
+  // reload after email confirmation), then clear it so it doesn't linger.
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(PENDING_LAYERS_KEY);
+    } catch {
+      saved = null;
+    }
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as FilterLayer[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        dispatch({ type: "restore", layers: parsed });
+        setShowRestoreBanner(true);
+      }
+    } catch {
+      // Corrupt payload — ignore.
+    }
+    try {
+      localStorage.removeItem(PENDING_LAYERS_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
+
   const showOverlaySection = !!overlayPath;
 
   return (
-    <main className="min-h-screen grid grid-cols-[380px_1fr] gap-0">
+    <div className="h-screen flex flex-col">
+      {/* Top navigation — tab switcher between Editor and Composite */}
+      <nav className="shrink-0 bg-ink-800 border-b border-ink-600 flex items-center px-4 h-10 gap-1">
+        <span className="text-xs font-bold tracking-tight text-ink-100 mr-4">picmagIQ</span>
+        {(["editor", "composite"] as const).map((tab) => {
+          if (tab === "composite" && !isPremium) return null;
+          return (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setMainTab(tab)}
+              className={[
+                "text-xs px-3 py-1 rounded transition capitalize",
+                mainTab === tab
+                  ? "bg-ink-600 text-white font-medium"
+                  : "text-ink-200 hover:text-white",
+              ].join(" ")}
+            >
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === "composite" && (
+                <span className="ml-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
+                  PRO
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        {/* USER MENU — reads auth state from AuthContext */}
+        <div className="ml-auto relative">
+          {!user ? (
+            <button
+              type="button"
+              onClick={() => setAuthMode("sign-in")}
+              className="text-xs px-3 py-1 rounded bg-ink-600 text-white font-medium hover:bg-ink-500 transition"
+            >
+              Sign In
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setUserMenuOpen((v) => !v)}
+                className="flex items-center gap-1.5 text-xs px-2 py-1 rounded text-ink-100 hover:bg-ink-700 transition max-w-[180px]"
+              >
+                <span className="truncate">{user.email}</span>
+                <ChevronIcon open={userMenuOpen} />
+              </button>
+              {userMenuOpen && (
+                <>
+                  {/* click-away backdrop */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setUserMenuOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1 w-44 bg-ink-800 border border-ink-600 rounded-md shadow-lg z-50 p-2">
+                    <div className="flex items-center justify-between px-2 py-1.5">
+                      <span className="text-[11px] text-ink-200">Plan</span>
+                      <span
+                        className={[
+                          "rounded-sm text-[9px] font-bold tracking-wider px-1 py-px leading-none",
+                          isPremium
+                            ? "bg-accent-500 text-ink-900"
+                            : "bg-ink-600 text-ink-100",
+                        ].join(" ")}
+                      >
+                        {isPremium ? "PREMIUM" : "BASIC"}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        signOut();
+                      }}
+                      className="w-full text-left text-xs text-ink-100 hover:bg-ink-700 rounded px-2 py-1.5 transition"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </nav>
+
+      {/* Restore banner — sits between the nav and the editor area */}
+      {showRestoreBanner && (
+        <div className="shrink-0 flex items-center gap-3 bg-ink-700 border-b border-ink-600 px-4 py-2">
+          <p className="flex-1 text-[13px] text-white">
+            Your image settings were saved. Please re-upload your image and it
+            will be available to export.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowRestoreBanner(false)}
+            aria-label="Dismiss"
+            className="shrink-0 text-ink-200 hover:text-white transition-colors"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+    {mainTab === "composite" && isPremium ? (
+      <CompositeWorkspace />
+    ) : (
+    <main className="flex-1 grid grid-cols-[380px_1fr] gap-0 grid-rows-[1fr] min-h-0 overflow-hidden">
       {/* LEFT PANEL */}
-      <aside className="bg-ink-800 border-r border-ink-600 p-6 overflow-y-auto max-h-screen">
+      <aside className="bg-ink-800 border-r border-ink-600 p-6 overflow-y-auto max-h-full">
         <header className="mb-6">
           <h1 className="text-lg font-semibold tracking-tight text-ink-100">
             picmagIQ
@@ -519,7 +776,7 @@ export default function Dashboard() {
                 type="button"
                 disabled={layers.length >= 5}
                 onClick={() => setShowPresetModal(true)}
-                className="w-full mt-2 rounded-md border border-dashed border-ink-500 text-xs text-ink-300 py-2 hover:border-ink-400 hover:text-ink-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                className="w-full mt-2 rounded-md border border-dashed border-ink-500 text-xs text-ink-200 py-2 hover:border-ink-400 hover:text-ink-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 + Add Layer{layers.length >= 5 ? " (max 5)" : ""}
               </button>
@@ -673,10 +930,34 @@ export default function Dashboard() {
         )}
 
         <Section title="Export">
+          <div
+            role="group"
+            aria-label="Export format"
+            className="flex gap-1 mb-2"
+          >
+            {(["webp", "jpeg", "png"] as const).map((fmt) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => {
+                  setExportFormat(fmt);
+                  setDownloadUrl(null);
+                }}
+                className={[
+                  "flex-1 text-xs uppercase py-1.5 rounded-md border transition",
+                  exportFormat === fmt
+                    ? "border-accent-500 bg-ink-700 text-white"
+                    : "border-ink-600 bg-ink-700/60 text-ink-200 hover:border-ink-400",
+                ].join(" ")}
+              >
+                {fmt}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             disabled={!basePath || exporting}
-            onClick={onExport}
+            onClick={handleExportClick}
             className="w-full rounded-md bg-accent-500 hover:bg-accent-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-sm py-2.5 transition shadow-[0_0_12px_rgba(239,108,78,0.25)]"
           >
             {exporting ? "Rendering export…" : "Export"}
@@ -684,22 +965,13 @@ export default function Dashboard() {
           {uploadError && (
             <p className="text-xs text-red-400 mt-2">{uploadError}</p>
           )}
-          {downloadUrl && (
-            <a
-              href={downloadUrl}
-              download
-              className="block mt-3 text-xs text-accent-400 underline break-all"
-            >
-              Download: {downloadUrl}
-            </a>
-          )}
         </Section>
       </aside>
 
       {/* RIGHT PANEL */}
       <section className="bg-ink-900 flex flex-col">
         <div className="border-b border-ink-600 px-6 py-3 flex items-center justify-between">
-          <span className="text-xs uppercase tracking-wider text-ink-300">
+          <span className="text-xs uppercase tracking-wider text-ink-200">
             Preview
           </span>
           <span className="text-[11px] text-ink-200">
@@ -727,6 +999,46 @@ export default function Dashboard() {
               </div>
             </div>
           )}
+          {basePath && focalLayer && focalActive && (
+            <FocalBlurOverlay
+              key={focalLayer.id}
+              params={focalLayer.params}
+              isActive={focalActive}
+              onChange={(params) =>
+                dispatch({ type: "set-params", id: focalLayer.id, params })
+              }
+              onDeselect={() => setActiveLayerId("")}
+            />
+          )}
+          {/* When the Focal Blur box is hidden (its layer isn't active), offer a
+              way back in. Re-selecting the layer re-renders the box at its last
+              set position. */}
+          {basePath && focalLayer && !focalActive && (
+            <button
+              type="button"
+              onClick={() => setActiveLayerId(focalLayer.id)}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-md border border-ink-600 bg-ink-900/80 text-white text-xs px-3 py-1.5 hover:bg-ink-800/80 transition"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="7" />
+                <line x1="12" y1="1" x2="12" y2="4" />
+                <line x1="12" y1="20" x2="12" y2="23" />
+                <line x1="1" y1="12" x2="4" y2="12" />
+                <line x1="20" y1="12" x2="23" y2="12" />
+              </svg>
+              Edit Focal Region
+            </button>
+          )}
         </div>
       </section>
 
@@ -735,9 +1047,39 @@ export default function Dashboard() {
         <PresetModal
           onClose={() => setShowPresetModal(false)}
           onSelect={addLayer}
+          existingPresets={layers.map((l) => l.preset)}
+          // Lock Pro presets for authenticated Basic users (isPremium from
+          // AuthContext). Unauthenticated users keep full access — they are
+          // gated at Export instead.
+          lockProPresets={!!user && !isPremium}
         />
       )}
+
+      {/* EXPORT READY MODAL */}
+      {downloadUrl && (
+        <ExportReadyModal
+          downloadUrl={downloadUrl}
+          onClose={() => setDownloadUrl(null)}
+        />
+      )}
+
+      {/* AI TUTOR — fixed floating chat button + drawer.
+          Hidden for Basic and unauthenticated users (isPremium from AuthContext). */}
+      <AiTutor layers={layers} hslAdjustments={hslAdjustments} isPremium={isPremium} />
     </main>
+    )}
+
+      {/* AUTH MODAL — export gate + nav Sign In (state from AuthContext) */}
+      {authMode && (
+        <AuthModal
+          key={authMode}
+          initialMode={authMode}
+          hasProLayers={hasProLayers}
+          onClose={closeAuthModal}
+          onAuthSuccess={handleAuthSuccess}
+        />
+      )}
+    </div>
   );
 }
 
@@ -795,7 +1137,7 @@ function LayerStack({
 function isMaskActive(mask: LayerMask): boolean {
   return (
     mask.luminosity.enabled ||
-    (mask.colorRange.enabled && mask.colorRange.channel !== null)
+    (mask.colorRange.enabled && mask.colorRange.activeChannels.length > 0)
   );
 }
 
@@ -875,10 +1217,7 @@ function LayerCard({
             e.stopPropagation();
             onToggleVisible();
           }}
-          className={[
-            "shrink-0 transition-colors",
-            layer.visible ? "text-ink-200 hover:text-ink-100" : "text-ink-500 hover:text-ink-300",
-          ].join(" ")}
+          className="shrink-0 text-ink-100 hover:text-white transition-colors"
           aria-label={layer.visible ? "Hide layer" : "Show layer"}
         >
           <EyeIcon open={layer.visible} />
@@ -909,7 +1248,7 @@ function LayerCard({
               "text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
               maskOpen || isMaskActive(layer.mask)
                 ? "border-accent-500 text-accent-400 bg-accent-500/10"
-                : "border-ink-400 text-ink-300 hover:text-white hover:border-ink-300",
+                : "border-ink-400 text-ink-200 hover:text-white hover:border-ink-300",
             ].join(" ")}
             aria-label="Toggle mask panel"
           >
@@ -929,26 +1268,6 @@ function LayerCard({
             <TrashIcon />
           </button>
         </div>
-      </div>
-
-      {/* Intensity slider */}
-      <div className="mt-2 flex items-center gap-2">
-        <span className="text-[10px] text-ink-200 shrink-0 w-12">Intensity</span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={layer.intensity}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          onChange={(e) => onSetIntensity(Number(e.target.value))}
-          className="flex-1 min-w-0 layer-intensity-slider"
-        />
-        <span className="text-[10px] text-ink-200 tabular-nums w-6 text-right shrink-0">
-          {layer.intensity}
-        </span>
       </div>
 
       {/* Inline mask panel */}
@@ -981,14 +1300,14 @@ function ToggleSwitch({
         onChange(!checked);
       }}
       className={[
-        "relative shrink-0 w-7 h-4 rounded-full transition-colors",
+        "relative shrink-0 w-11 h-6 rounded-full border border-ink-300 transition-colors",
         checked ? "bg-accent-500" : "bg-ink-600",
       ].join(" ")}
     >
       <span
         className={[
-          "absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform",
-          checked ? "translate-x-3.5" : "translate-x-0.5",
+          "absolute top-[3px] w-[18px] h-[18px] rounded-full bg-white transition-all",
+          checked ? "left-[23px]" : "left-[3px]",
         ].join(" ")}
       />
     </button>
@@ -1062,6 +1381,31 @@ function MaskPanel({
   const setColor = (patch: Partial<LayerMask["colorRange"]>) =>
     onUpdate({ ...mask, colorRange: { ...mask.colorRange, ...patch } });
 
+  const setChannelSetting = (patch: Partial<MaskChannelSettings>) => {
+    const ch = mask.colorRange.focusedChannel;
+    if (!ch) return;
+    const existing = mask.colorRange.channels ?? defaultChannels();
+    onUpdate({
+      ...mask,
+      colorRange: {
+        ...mask.colorRange,
+        channels: { ...existing, [ch]: { ...existing[ch], ...patch } },
+      },
+    });
+  };
+
+  // Backwards compat: old state had a single `channel` field.
+  const cr = mask.colorRange;
+  const activeChannels: MaskChannel[] =
+    cr.activeChannels ?? ((cr as any).channel ? [(cr as any).channel as MaskChannel] : []);
+  const focusedCh: MaskChannel | null =
+    cr.focusedChannel !== undefined
+      ? cr.focusedChannel
+      : ((cr as any).channel as MaskChannel | null) ?? null;
+  const chSettings = focusedCh
+    ? (cr.channels ?? defaultChannels())[focusedCh]
+    : null;
+
   return (
     <div
       className="mt-2 pt-2 border-t border-ink-600 space-y-1"
@@ -1083,7 +1427,6 @@ function MaskPanel({
               if (enabled) setLumOpen(true);
             }}
           />
-          <ChevronIcon open={lumOpen} />
         </button>
         {lumOpen && (
           <div
@@ -1094,7 +1437,7 @@ function MaskPanel({
           >
             <div>
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Range</span>
+                <span className="text-[10px] text-ink-200">Range</span>
                 <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.luminosity.min}–{mask.luminosity.max}
                 </span>
@@ -1110,7 +1453,7 @@ function MaskPanel({
             </div>
             <label className="block">
               <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Smoothness</span>
+                <span className="text-[10px] text-ink-200">Smoothness</span>
                 <span className="text-[10px] text-ink-200 tabular-nums">
                   {mask.luminosity.smoothness}
                 </span>
@@ -1126,7 +1469,7 @@ function MaskPanel({
               />
             </label>
             <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-[10px] text-ink-300">Invert</span>
+              <span className="text-[10px] text-ink-200">Invert</span>
               <input
                 type="checkbox"
                 checked={mask.luminosity.invert}
@@ -1153,7 +1496,6 @@ function MaskPanel({
               if (enabled) setColorOpen(true);
             }}
           />
-          <ChevronIcon open={colorOpen} />
         </button>
         {colorOpen && (
           <div
@@ -1163,76 +1505,172 @@ function MaskPanel({
             ].join(" ")}
           >
             <div>
-              <span className="text-[10px] text-ink-300 block mb-1.5">
-                Channel
+              <span className="text-[10px] text-ink-200 block mb-1.5">
+                Channels
               </span>
               <div className="flex flex-wrap gap-1">
                 {MASK_CHANNEL_DEFS.map(({ key, label, color }) => {
-                  const active = mask.colorRange.channel === key;
+                  const isActive = activeChannels.includes(key);
                   return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setColor({ channel: key })}
-                      className={[
-                        "text-[10px] w-6 h-6 rounded-full border transition font-medium",
-                        active
-                          ? "border-current"
-                          : "border-ink-600 text-ink-200 hover:text-ink-200 hover:border-ink-400",
-                      ].join(" ")}
-                      style={active ? { color, borderColor: color } : undefined}
-                    >
-                      {label}
-                    </button>
+                    <div key={key} className="relative">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isActive) {
+                            setColor({ activeChannels: [...activeChannels, key], focusedChannel: key });
+                          } else {
+                            setColor({ focusedChannel: key });
+                          }
+                        }}
+                        className={[
+                          "text-[10px] w-6 h-6 rounded-full border transition font-medium",
+                          isActive
+                            ? "border-current"
+                            : "border-ink-600 text-ink-200 hover:text-ink-200 hover:border-ink-400",
+                        ].join(" ")}
+                        style={isActive ? { color, borderColor: color } : undefined}
+                      >
+                        {label}
+                      </button>
+                      {isActive && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newActive = activeChannels.filter((k) => k !== key);
+                            const newFocused =
+                              focusedCh === key ? (newActive[0] ?? null) : focusedCh;
+                            setColor({ activeChannels: newActive, focusedChannel: newFocused });
+                          }}
+                          className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-ink-500 hover:bg-ink-400 text-ink-100 flex items-center justify-center text-[8px] leading-none"
+                          aria-label={`Remove ${key}`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
             </div>
-            <label className="block">
-              <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Expansion</span>
-                <span className="text-[10px] text-ink-200 tabular-nums">
-                  {mask.colorRange.expansion}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={mask.colorRange.expansion}
-                onChange={(e) => setColor({ expansion: Number(e.target.value) })}
-                className="w-full"
-              />
-            </label>
-            <label className="block">
-              <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[10px] text-ink-300">Smoothness</span>
-                <span className="text-[10px] text-ink-200 tabular-nums">
-                  {mask.colorRange.smoothness}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={mask.colorRange.smoothness}
-                onChange={(e) => setColor({ smoothness: Number(e.target.value) })}
-                className="w-full"
-              />
-            </label>
-            <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-[10px] text-ink-300">Invert</span>
-              <input
-                type="checkbox"
-                checked={mask.colorRange.invert}
-                onChange={(e) => setColor({ invert: e.target.checked })}
-                className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
-              />
-            </label>
+            {chSettings === null ? (
+              <p className="text-[10px] text-ink-100 text-center py-1">
+                Select a channel to adjust its settings.
+              </p>
+            ) : (
+              <>
+                <p className="text-[10px] font-medium text-ink-200">
+                  {focusedCh!.charAt(0).toUpperCase() + focusedCh!.slice(1)}
+                </p>
+                <label className="block">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-[10px] text-ink-200">Expansion</span>
+                    <span className="text-[10px] text-ink-200 tabular-nums">
+                      {chSettings.expansion}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={chSettings.expansion}
+                    onChange={(e) => setChannelSetting({ expansion: Number(e.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="block">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-[10px] text-ink-200">Smoothness</span>
+                    <span className="text-[10px] text-ink-200 tabular-nums">
+                      {chSettings.smoothness}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={chSettings.smoothness}
+                    onChange={(e) => setChannelSetting({ smoothness: Number(e.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-[10px] text-ink-200">Invert</span>
+                  <input
+                    type="checkbox"
+                    checked={chSettings.invert}
+                    onChange={(e) => setChannelSetting({ invert: e.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-ink-500 bg-ink-700 text-accent-500 focus:ring-accent-500"
+                  />
+                </label>
+              </>
+            )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Export ready modal ----------
+
+function ExportReadyModal({
+  downloadUrl,
+  onClose,
+}: {
+  downloadUrl: string;
+  onClose: () => void;
+}) {
+  const fileName = downloadUrl.split("/").pop() || "export";
+  const format = (fileName.split(".").pop() || "").toUpperCase();
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative bg-ink-800 border border-ink-600 rounded-lg p-6 w-full max-w-xs"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-3 right-3 text-ink-200 hover:text-white transition-colors"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+
+        <p className="text-sm font-medium text-white pr-6">
+          Your export is ready
+        </p>
+        <p className="text-xs text-ink-200 mt-1 break-all">
+          {format} · {fileName}
+        </p>
+
+        <a
+          href={downloadUrl}
+          download={fileName}
+          className="block w-full text-center mt-5 rounded-md bg-accent-500 hover:bg-accent-400 text-white font-semibold text-sm py-2.5 transition shadow-[0_0_12px_rgba(239,108,78,0.25)]"
+        >
+          Download
+        </a>
       </div>
     </div>
   );
@@ -1243,9 +1681,13 @@ function MaskPanel({
 function PresetModal({
   onClose,
   onSelect,
+  existingPresets,
+  lockProPresets,
 }: {
   onClose: () => void;
   onSelect: (id: PresetId) => void;
+  existingPresets: PresetId[];
+  lockProPresets: boolean;
 }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1254,6 +1696,11 @@ function PresetModal({
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  // Focal Blur is limited to one layer — hide it once one already exists.
+  const availablePresets = PRESETS.filter(
+    (p) => p.id !== "focal-blur" || !existingPresets.includes("focal-blur"),
+  );
 
   return (
     <div
@@ -1278,26 +1725,341 @@ function PresetModal({
           </button>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => onSelect(p.id)}
-              className="relative text-left rounded-md border border-ink-600 bg-ink-700/60 hover:border-accent-500 px-3 py-2 transition"
-            >
-              {p.pro && (
-                <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                  PRO
-                </span>
-              )}
-              <div className="text-sm text-ink-100 pr-7">{p.name}</div>
-              <div className="text-[11px] text-ink-300 mt-0.5 leading-snug">
-                {p.description}
-              </div>
-            </button>
-          ))}
+          {availablePresets.map((p) => {
+            // Pro cards stay visible but are locked for Basic users.
+            const locked = !!p.pro && lockProPresets;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                disabled={locked}
+                onClick={() => onSelect(p.id)}
+                className={[
+                  "relative text-left rounded-md border px-3 py-2 transition",
+                  locked
+                    ? "border-ink-600 bg-ink-700/40 opacity-60 cursor-not-allowed"
+                    : "border-ink-600 bg-ink-700/60 hover:border-accent-500",
+                ].join(" ")}
+              >
+                {p.pro && (
+                  <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
+                    PRO
+                  </span>
+                )}
+                <div className="text-sm text-ink-100 pr-7">{p.name}</div>
+                <div className="text-[11px] text-ink-200 mt-0.5 leading-snug">
+                  {locked ? "Premium only" : p.description}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- Focal Blur bounding-box overlay ----------
+
+type FocalBox = { x: number; y: number; w: number; h: number }; // fractions, top-left origin
+type FocalHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+type FocalDrag =
+  | { kind: "move"; startX: number; startY: number; orig: FocalBox }
+  | { kind: "resize"; handle: FocalHandle; startX: number; startY: number; orig: FocalBox };
+
+const FOCAL_HANDLE_CURSORS: Record<FocalHandle, string> = {
+  nw: "nwse-resize", n: "ns-resize", ne: "nesw-resize",
+  e:  "ew-resize",   s: "ns-resize", se: "nwse-resize",
+  sw: "nesw-resize", w: "ew-resize",
+};
+const FOCAL_MIN = 0.1; // minimum box size: 10% of preview width/height
+
+// Interactive bounding box drawn over the preview panel for the Focal Blur
+// preset. The box lives in local state so dragging and resizing it never
+// touches the layer params or triggers a (slow) WebGL re-render. The user
+// commits the box with the "Apply Blur" button, which writes focalX/focalY/
+// focalW/focalH/focalRadius onto the layer and triggers a single re-render.
+// Positions/sizes are 0–1 fractions of the preview panel so they survive
+// panel resizes.
+function FocalBlurOverlay({
+  params,
+  isActive,
+  onChange,
+  onDeselect,
+}: {
+  params: Params;
+  isActive: boolean;
+  onChange: (params: Params) => void;
+  onDeselect: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [applying, setApplying] = useState(false);
+  const dragRef = useRef<FocalDrag | null>(null);
+  // Pointer-down position for a click on the backdrop, used to tell a plain
+  // click (deselect) from a drag gesture (ignore).
+  const deselectDownRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Box geometry, local to the overlay until the user clicks Apply. Seeded from
+  // any previously-applied params, otherwise the default centered middle third.
+  const [box, setBox] = useState<FocalBox>(() => {
+    const num = (v: unknown, d: number) => (typeof v === "number" ? v : d);
+    const fw = num(params.focalW, 1 / 3);
+    const fh = num(params.focalH, 1 / 3);
+    const fx = num(params.focalX, 0.5);
+    const fy = num(params.focalY, 0.5);
+    return { x: fx - fw / 2, y: fy - fh / 2, w: fw, h: fh };
+  });
+
+  // Track the panel's pixel size so handles render at a fixed pixel radius and
+  // so focalRadius (a fraction of the shorter pixel dimension) can be derived.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const ptFromEvent = (e: React.PointerEvent | React.MouseEvent) => {
+    const r = containerRef.current!.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+
+  // Cursor shown on the SVG; reflects the in-progress drag (move / resize dir).
+  const cursorForDrag = (d: FocalDrag | null) =>
+    !d ? "default" : d.kind === "move" ? "move" : FOCAL_HANDLE_CURSORS[d.handle];
+
+  // Pointer capture routes every subsequent pointer event to the SVG element,
+  // regardless of what sits underneath (notably the preview iframe). This is
+  // what prevents a drag from getting "stuck" when a mouseup lands on the
+  // iframe, which would otherwise never reach a window listener.
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!isActive) return;
+    const target = e.target as Element;
+    const role = target.getAttribute("data-focal-role");
+    if (role !== "move" && role !== "resize") return;
+    e.preventDefault();
+    const pt = ptFromEvent(e);
+    if (role === "move") {
+      dragRef.current = { kind: "move", startX: pt.x, startY: pt.y, orig: box };
+    } else {
+      const handle = target.getAttribute("data-focal-handle") as FocalHandle;
+      dragRef.current = { kind: "resize", handle, startX: pt.x, startY: pt.y, orig: box };
+    }
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  // Dragging updates local state ONLY — no params write, no preview re-render.
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    const el = containerRef.current;
+    if (!drag || !el) return;
+    const r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    if (drag.kind === "move") {
+      const x = Math.max(0, Math.min(1 - drag.orig.w, drag.orig.x + (px - drag.startX)));
+      const y = Math.max(0, Math.min(1 - drag.orig.h, drag.orig.y + (py - drag.startY)));
+      setBox({ x, y, w: drag.orig.w, h: drag.orig.h });
+    } else {
+      const dx = px - drag.startX;
+      const dy = py - drag.startY;
+      const hd = drag.handle;
+      let { x, y, w, h } = drag.orig;
+      if (hd.includes("w")) { x += dx; w -= dx; }
+      if (hd.includes("e")) { w += dx; }
+      if (hd.includes("n")) { y += dy; h -= dy; }
+      if (hd.includes("s")) { h += dy; }
+      if (w < FOCAL_MIN) { if (hd.includes("w")) x = drag.orig.x + drag.orig.w - FOCAL_MIN; w = FOCAL_MIN; }
+      if (h < FOCAL_MIN) { if (hd.includes("n")) y = drag.orig.y + drag.orig.h - FOCAL_MIN; h = FOCAL_MIN; }
+      x = Math.max(0, Math.min(1 - FOCAL_MIN, x));
+      y = Math.max(0, Math.min(1 - FOCAL_MIN, y));
+      if (x + w > 1) w = 1 - x;
+      if (y + h > 1) h = 1 - y;
+      setBox({ x, y, w, h });
+    }
+  };
+
+  // Releasing (or cancelling) the pointer ends the drag cleanly.
+  const handlePointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!dragRef.current) return;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    dragRef.current = null;
+  };
+
+  // Commit the current box to the layer params and trigger a single re-render.
+  // Shows a brief "Applying…" state until the preview reports a completed
+  // render (with a safety timeout in case no message arrives).
+  const handleApply = () => {
+    if (applying) return;
+    const shorter = Math.min(size.w, size.h) || 1;
+    const focalRadius = ((box.w * size.w) / 2 + (box.h * size.h) / 2) / 2 / shorter;
+    setApplying(true);
+
+    let done = false;
+    let timer = 0;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("message", onRendered);
+      window.clearTimeout(timer);
+      setApplying(false);
+    };
+    function onRendered(ev: MessageEvent) {
+      if (ev.data && typeof ev.data === "object" && ev.data.type === "rendered") finish();
+    }
+    timer = window.setTimeout(finish, 2500);
+    window.addEventListener("message", onRendered);
+
+    onChange({
+      ...params,
+      focalX: box.x + box.w / 2,
+      focalY: box.y + box.h / 2,
+      focalW: box.w,
+      focalH: box.h,
+      focalRadius,
+    });
+  };
+
+  const W = size.w;
+  const H = size.h;
+  const bx = box.x * W;
+  const by = box.y * H;
+  const bw = box.w * W;
+  const bh = box.h * H;
+  const handles: { id: FocalHandle; x: number; y: number }[] = [
+    { id: "nw", x: bx,            y: by },
+    { id: "n",  x: bx + bw / 2,   y: by },
+    { id: "ne", x: bx + bw,       y: by },
+    { id: "e",  x: bx + bw,       y: by + bh / 2 },
+    { id: "se", x: bx + bw,       y: by + bh },
+    { id: "s",  x: bx + bw / 2,   y: by + bh },
+    { id: "sw", x: bx,            y: by + bh },
+    { id: "w",  x: bx,            y: by + bh / 2 },
+  ];
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0"
+      style={{ pointerEvents: "none" }}
+    >
+      {/* Backdrop click target — sits below the SVG so the box rect and handles
+          still win their hits. A plain click here (no drag) deselects the layer
+          and dims the box; box drags go to the captured SVG and never reach it.
+          Rendered only when active so it never blocks the preview otherwise. */}
+      {isActive && (
+        <div
+          className="absolute inset-0"
+          style={{ pointerEvents: "auto" }}
+          onPointerDown={(e) => {
+            deselectDownRef.current = { x: e.clientX, y: e.clientY };
+          }}
+          onClick={(e) => {
+            const down = deselectDownRef.current;
+            deselectDownRef.current = null;
+            if (!down) return;
+            const moved =
+              Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4;
+            if (!moved) onDeselect();
+          }}
+        />
+      )}
+      <svg
+        width={W}
+        height={H}
+        className="absolute left-0 top-0"
+        style={{ touchAction: "none", cursor: cursorForDrag(dragRef.current) }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
+        {/* Dark overlay outside the focal region — visible only when active */}
+        {isActive && W > 0 && H > 0 && (
+          <>
+            <rect x={0} y={0} width={W} height={by} fill="rgba(0,0,0,0.45)" />
+            <rect x={0} y={by + bh} width={W} height={Math.max(0, H - by - bh)} fill="rgba(0,0,0,0.45)" />
+            <rect x={0} y={by} width={bx} height={bh} fill="rgba(0,0,0,0.45)" />
+            <rect x={bx + bw} y={by} width={Math.max(0, W - bx - bw)} height={bh} fill="rgba(0,0,0,0.45)" />
+          </>
+        )}
+
+        {/* Box border (and move target when active) */}
+        <rect
+          data-focal-role="move"
+          x={bx}
+          y={by}
+          width={bw}
+          height={bh}
+          fill="transparent"
+          stroke="white"
+          strokeWidth={2}
+          strokeDasharray="6 4"
+          style={{
+            pointerEvents: isActive ? "all" : "none",
+            cursor: isActive ? "move" : "default",
+          }}
+        />
+
+        {/* Anchor handles — 4 corners + 4 edge midpoints */}
+        {handles.map((hnd) => (
+          <circle
+            key={hnd.id}
+            data-focal-role="resize"
+            data-focal-handle={hnd.id}
+            cx={hnd.x}
+            cy={hnd.y}
+            r={4}
+            fill="white"
+            stroke="#1a1a1a"
+            strokeWidth={1}
+            style={{
+              pointerEvents: isActive ? "all" : "none",
+              cursor: isActive ? FOCAL_HANDLE_CURSORS[hnd.id] : "default",
+            }}
+          />
+        ))}
+      </svg>
+
+      {/* Tooltip pinned to the top-right corner — hidden when dimmed */}
+      {isActive && W > 0 && (
+        <div
+          className="absolute rounded bg-ink-900/90 text-white px-1.5 py-0.5 leading-none"
+          style={{
+            left: bx + bw,
+            top: by,
+            transform: "translate(-100%, -130%)",
+            fontSize: 11,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Focal Region
+        </div>
+      )}
+
+      {/* Apply Blur — commits the box and renders. Hidden when dimmed. */}
+      {isActive && W > 0 && (
+        <button
+          type="button"
+          disabled={applying}
+          onClick={handleApply}
+          className="absolute rounded-md bg-accent-500 hover:bg-accent-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-medium text-xs px-3 py-1 shadow-[0_0_12px_rgba(239,108,78,0.25)]"
+          style={{
+            left: bx + bw / 2,
+            top: by + bh,
+            transform: "translate(-50%, 8px)",
+            pointerEvents: "auto",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {applying ? "Applying…" : "Apply Blur"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1403,7 +2165,7 @@ function FilterPanel({
                 </span>
               )}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
-              <div className="text-[11px] text-ink-300 mt-0.5 leading-snug">
+              <div className="text-[11px] text-ink-200 mt-0.5 leading-snug">
                 {p.description}
               </div>
             </button>
@@ -1464,7 +2226,7 @@ function Section({
 }) {
   return (
     <section className="mb-6">
-      <h2 className="text-[11px] uppercase tracking-wider text-ink-300 mb-2">
+      <h2 className="text-[11px] uppercase tracking-wider text-ink-200 mb-2">
         {title}
       </h2>
       {children}
@@ -1799,7 +2561,7 @@ function HslPanel({
   return (
     <section className="mb-6">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-[11px] uppercase tracking-wider text-ink-300">
+        <h2 className="text-[11px] uppercase tracking-wider text-ink-200">
           HSL / Color
         </h2>
         <button
@@ -1886,7 +2648,7 @@ function HslSlider({
   return (
     <label className="block">
       <div className="flex items-baseline justify-between mb-1">
-        <span className="text-xs text-ink-300">{label}</span>
+        <span className="text-xs text-ink-200">{label}</span>
         <span className="text-[11px] text-ink-200 tabular-nums">{formatted}</span>
       </div>
       <input
