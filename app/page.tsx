@@ -19,7 +19,7 @@ import {
 import AiTutor from "@/components/AiTutor";
 import CompositeWorkspace from "@/components/CompositeWorkspace";
 import { useAuth } from "@/lib/auth-context";
-import AuthModal, { AuthMode } from "@/components/AuthModal";
+import AuthModal, { AuthMode, preservePendingLayers } from "@/components/AuthModal";
 
 type Params = Record<string, string | number | boolean>;
 
@@ -250,7 +250,7 @@ function saveLayerStackToStorage(layers: FilterLayer[]) {
 
 export default function Dashboard() {
   // Subscription state comes from AuthContext (Supabase profile.tier).
-  const { user, isPremium, isLoading: authLoading, signOut } = useAuth();
+  const { user, isPremium, profile, isLoading: authLoading, signOut } = useAuth();
   const [mainTab, setMainTab] = useState<"editor" | "composite">("editor");
 
   // Auth modal, the export waiting on auth to finish, and the top-bar menu.
@@ -411,6 +411,9 @@ export default function Dashboard() {
         setBasePath(json.imagePath);
         // A fresh image makes the "settings were saved" banner obsolete.
         setShowRestoreBanner(false);
+        try {
+          localStorage.removeItem(PENDING_LAYERS_KEY);
+        } catch {}
       } else setOverlayPath(json.imagePath);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : String(err));
@@ -536,7 +539,8 @@ export default function Dashboard() {
 
   // Resume a pending export after auth (or an in-modal upgrade) completes.
   useEffect(() => {
-    if (!pendingExport || authLoading || !user) return;
+    if (!pendingExport || authLoading || !user || !profile) return;
+    if (profile.subscription_status !== "active") return;
     if (isPremium || !hasProLayers) {
       setPendingExport(false);
       setAuthMode(null);
@@ -550,7 +554,9 @@ export default function Dashboard() {
   }, [pendingExport, authLoading, user, isPremium, hasProLayers]);
 
   // On mount, restore a layer stack persisted before the auth flow (e.g. the
-  // reload after email confirmation), then clear it so it doesn't linger.
+  // reload after email confirmation). The key is intentionally NOT cleared
+  // here — it is cleared after a successful export or when a new base image is
+  // uploaded, so the stack survives interruptions like the Stripe redirect.
   useEffect(() => {
     let saved: string | null = null;
     try {
@@ -568,12 +574,77 @@ export default function Dashboard() {
     } catch {
       // Corrupt payload — ignore.
     }
-    try {
-      localStorage.removeItem(PENDING_LAYERS_KEY);
-    } catch {
-      // Ignore storage failures.
-    }
   }, []);
+
+  // After a Google OAuth signup, send the user to Stripe Checkout for the
+  // chosen plan once their session is available (intent stashed in AuthModal).
+  useEffect(() => {
+    if (!user) return;
+    let intent: string | null = null;
+    try {
+      intent = localStorage.getItem("picmagiq_oauth_intent");
+    } catch {}
+    if (intent === "premium" || intent === "basic") {
+      try {
+        localStorage.removeItem("picmagiq_oauth_intent");
+      } catch {}
+      const targetPriceId =
+        intent === "premium"
+          ? process.env.NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID
+          : process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID;
+      // Only redirect if not already on the correct or higher tier
+      const alreadySubscribed =
+        intent === "basic" ? profile?.subscription_status === "active" : isPremium;
+      if (!alreadySubscribed) {
+        fetch("/api/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ priceId: targetPriceId }),
+        })
+          .then((r) => r.json())
+          .then(({ url }) => {
+            preservePendingLayers();
+            if (url) window.location.href = url;
+          })
+          .catch(console.error);
+      }
+    }
+  }, [user]);
+
+  // After an email/password signup that required confirmation, resume Stripe
+  // Checkout on landing (intent + uid stashed in AuthModal before confirmation).
+  useEffect(() => {
+    if (!user) return;
+    let intent: string | null = null;
+    let uid: string | null = null;
+    try {
+      intent = localStorage.getItem("picmagiq_signup_intent");
+      uid = localStorage.getItem("picmagiq_signup_uid");
+    } catch {}
+    if ((intent === "basic" || intent === "premium") && uid === user.id) {
+      try {
+        localStorage.removeItem("picmagiq_signup_intent");
+        localStorage.removeItem("picmagiq_signup_uid");
+      } catch {}
+      const targetPriceId =
+        intent === "premium"
+          ? process.env.NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID
+          : process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID;
+      const alreadySubscribed = profile?.subscription_status === "active";
+      if (!alreadySubscribed) {
+        fetch("/api/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ priceId: targetPriceId }),
+        })
+          .then((r) => r.json())
+          .then(({ url }) => {
+            if (url) window.location.href = url;
+          })
+          .catch(console.error);
+      }
+    }
+  }, [user]);
 
   const showOverlaySection = !!overlayPath;
 
@@ -647,6 +718,37 @@ export default function Dashboard() {
                         {isPremium ? "PREMIUM" : "BASIC"}
                       </span>
                     </div>
+                    {/* Active subscription (Basic or Premium): manage it.
+                        No active subscription: offer upgrade to Premium. */}
+                    {profile?.subscription_status === "active" ? (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await fetch("/api/billing-portal", { method: "POST" });
+                          const { url } = await res.json();
+                          if (url) window.location.href = url;
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm text-ink-200 hover:bg-ink-700 transition-colors"
+                      >
+                        Manage Subscription
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await fetch("/api/checkout", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID }),
+                          });
+                          const { url } = await res.json();
+                          if (url) window.location.href = url;
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm text-accent-400 hover:bg-ink-700 transition-colors"
+                      >
+                        Upgrade to Premium
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {

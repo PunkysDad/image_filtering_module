@@ -3,6 +3,18 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
+export function preservePendingLayers() {
+  // If picmagiq_pending_layers was written by the export gate, re-write it
+  // immediately before any Stripe redirect so it survives the full OAuth +
+  // Stripe round-trip. This is a no-op if the key is absent.
+  try {
+    const existing = localStorage.getItem("picmagiq_pending_layers");
+    if (existing) {
+      localStorage.setItem("picmagiq_pending_layers", existing);
+    }
+  } catch {}
+}
+
 export type AuthMode =
   | "sign-up-prompt"
   | "sign-in"
@@ -31,7 +43,7 @@ export default function AuthModal({
   onClose,
   onAuthSuccess,
 }: Props) {
-  const { supabase, refreshProfile, user } = useAuth();
+  const { supabase } = useAuth();
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -69,8 +81,6 @@ export default function AuthModal({
       return;
     }
     setBusy(true);
-    // Tier defaults to 'basic' via the public.handle_new_user() trigger, so no
-    // extra call is needed for Basic.
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -78,11 +88,29 @@ export default function AuthModal({
     });
     setBusy(false);
     if (error) return setError(error.message);
+
+    // Store intent for after email confirmation callback
+    try {
+      localStorage.setItem("picmagiq_signup_intent", "basic");
+      if (data.user?.id) {
+        localStorage.setItem("picmagiq_signup_uid", data.user.id);
+      }
+    } catch {}
+
     if (data.session) {
-      // Email confirmation disabled — signed in immediately.
-      onAuthSuccess();
+      // Immediate session (email confirmation not required) — go straight to Checkout
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          priceId: process.env.NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID,
+        }),
+      });
+      const { url } = await res.json();
+      preservePendingLayers();
+      if (url) window.location.href = url;
     } else {
-      // user but no session → confirmation pending; wait for the email link.
+      // Email confirmation required — show confirmation message
       go("confirm-email");
     }
   };
@@ -95,7 +123,7 @@ export default function AuthModal({
       return;
     }
     setBusy(true);
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email,
       password,
       options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
@@ -104,50 +132,43 @@ export default function AuthModal({
       setBusy(false);
       return setError(error.message);
     }
-    if (data.session) {
-      // Email confirmation disabled — session exists immediately. Grant Premium.
-      // Payment is not implemented yet — grant Premium directly. When Stripe is
-      // wired up this must only happen after a verified successful payment.
-      const uid = data.user?.id;
-      if (uid) {
-        await fetch("/api/auth/set-tier", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: uid, tier: "premium" }),
-        }).catch(() => undefined);
-        await refreshProfile();
-      }
-      setBusy(false);
-      onAuthSuccess();
-    } else {
-      // user but no session → email confirmation pending. The signup trigger
-      // creates the profile with tier "basic", and we cannot call set-tier here
-      // because there is no authenticated session yet. Stash the intended tier
-      // so AuthContext can apply it once the session is established after the
-      // user confirms their email (and signs back in).
-      // TODO: When the payment flow exists, the tier must only be granted after
-      // a verified payment rather than purely on signup intent.
-      try {
-        if (data.user) {
-          localStorage.setItem("picmagiq_pending_tier", "premium");
-          localStorage.setItem("picmagiq_pending_tier_uid", data.user.id);
-        }
-      } catch {
-        // Ignore storage failures (quota / disabled).
-      }
-      setBusy(false);
-      go("confirm-email");
-    }
+    // Premium tier is granted by the Stripe webhook after a successful payment,
+    // so send the new user straight to Stripe Checkout (whether the session is
+    // immediate or email confirmation is required).
+    const res = await fetch("/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        priceId: process.env.NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID,
+      }),
+    });
+    const { url } = await res.json();
+    preservePendingLayers();
+    if (url) window.location.href = url;
+    setBusy(false);
   };
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (intent?: "basic" | "premium") => {
     setError(null);
+    if (intent === "premium") {
+      try {
+        localStorage.setItem("picmagiq_oauth_intent", "premium");
+      } catch {}
+    } else if (intent === "basic") {
+      try {
+        localStorage.setItem("picmagiq_oauth_intent", "basic");
+      } catch {}
+    } else {
+      try {
+        localStorage.removeItem("picmagiq_oauth_intent");
+      } catch {}
+    }
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
     });
-    // Redirects away; the session is restored on return and the AuthProvider
-    // picks it up via onAuthStateChange.
   };
 
   const sendReset = async (e: React.FormEvent) => {
@@ -162,18 +183,23 @@ export default function AuthModal({
     go("reset-sent");
   };
 
-  // Upgrade an already-authenticated Basic user to Premium (no payment yet).
+  // Upgrade an already-authenticated Basic user to Premium via Stripe Checkout.
+  // Tier is granted by the webhook once payment succeeds.
   const upgradeToPremium = async () => {
-    if (!user) return;
-    setBusy(true);
-    await fetch("/api/auth/set-tier", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: user.id, tier: "premium" }),
-    }).catch(() => undefined);
-    await refreshProfile();
-    setBusy(false);
-    onAuthSuccess();
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          priceId: process.env.NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID,
+        }),
+      });
+      const { url } = await res.json();
+      preservePendingLayers();
+      if (url) window.location.href = url;
+    } catch (err) {
+      console.error("Checkout error:", err);
+    }
   };
 
   // ---------- shared bits ----------
@@ -335,7 +361,7 @@ export default function AuthModal({
         <p className="text-xs text-ink-200 mt-1 mb-4">Basic — $19.99/mo</p>
         <button
           type="button"
-          onClick={signInWithGoogle}
+          onClick={() => signInWithGoogle("basic")}
           className="w-full mt-2 rounded-md border border-ink-600 bg-ink-700/60 hover:border-ink-400 text-ink-100 text-sm py-2.5 transition"
         >
           Continue with Google
@@ -368,7 +394,7 @@ export default function AuthModal({
         <p className="text-xs text-ink-200 mt-1 mb-4">Premium — $29.99/mo</p>
         <button
           type="button"
-          onClick={signInWithGoogle}
+          onClick={() => signInWithGoogle("premium")}
           className="w-full mt-2 rounded-md border border-ink-600 bg-ink-700/60 hover:border-ink-400 text-ink-100 text-sm py-2.5 transition"
         >
           Continue with Google
@@ -407,7 +433,7 @@ export default function AuthModal({
         </form>
         <button
           type="button"
-          onClick={signInWithGoogle}
+          onClick={() => signInWithGoogle()}
           className="w-full mt-2 rounded-md border border-ink-600 bg-ink-700/60 hover:border-ink-400 text-ink-100 text-sm py-2.5 transition"
         >
           Continue with Google
