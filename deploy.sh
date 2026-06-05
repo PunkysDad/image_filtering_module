@@ -28,6 +28,7 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 ECR_REPO_NAME="${ECR_REPO_NAME:-picmagiq}"
 ECS_CLUSTER_NAME="${ECS_CLUSTER_NAME:-picmagiq-cluster}"
 ECS_SERVICE_NAME="${ECS_SERVICE_NAME:-picmagiq-service}"
+CLOUDFRONT_DISTRIBUTION_ID="${CLOUDFRONT_DISTRIBUTION_ID:-E2CXL1HH6EUYAB}"
 
 prompt_if_unset AWS_REGION       "AWS_REGION (e.g. us-east-1)"
 prompt_if_unset AWS_ACCOUNT_ID   "AWS_ACCOUNT_ID (12-digit account id)"
@@ -68,6 +69,52 @@ aws ecs update-service \
   --service "${ECS_SERVICE_NAME}" \
   --force-new-deployment \
   > /dev/null
+
+echo "==> Waiting for new task to start..."
+sleep 60
+
+echo "==> Getting new task public IP"
+TASK_ARN=$(aws ecs list-tasks \
+  --region "${AWS_REGION}" \
+  --cluster "${ECS_CLUSTER_NAME}" \
+  --service-name "${ECS_SERVICE_NAME}" \
+  --query 'taskArns[0]' \
+  --output text)
+
+ENI_ID=$(aws ecs describe-tasks \
+  --region "${AWS_REGION}" \
+  --cluster "${ECS_CLUSTER_NAME}" \
+  --tasks "${TASK_ARN}" \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+  --output text)
+
+NEW_IP=$(aws ec2 describe-network-interfaces \
+  --region "${AWS_REGION}" \
+  --network-interface-ids "${ENI_ID}" \
+  --query 'NetworkInterfaces[0].Association.PublicIp' \
+  --output text)
+
+echo "==> New task IP: ${NEW_IP}"
+
+echo "==> Updating CloudFront origin to ${NEW_IP}.nip.io"
+ETAG=$(aws cloudfront get-distribution-config \
+  --id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+  --query 'ETag' \
+  --output text)
+
+aws cloudfront get-distribution-config \
+  --id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+  --query 'DistributionConfig' \
+  | sed "s/[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.nip\.io/${NEW_IP}.nip.io/g" \
+  > /tmp/dist-config.json
+
+aws cloudfront update-distribution \
+  --id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+  --if-match "${ETAG}" \
+  --distribution-config "file:///tmp/dist-config.json" \
+  > /dev/null
+
+echo "==> CloudFront origin updated to ${NEW_IP}.nip.io"
 
 echo
 echo "Deploy complete."
