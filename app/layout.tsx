@@ -5,6 +5,10 @@ import { AuthProvider } from "@/lib/auth-context";
 export const metadata: Metadata = {
   title: "picmagIQ",
   description: "Professional image filters for your content",
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
