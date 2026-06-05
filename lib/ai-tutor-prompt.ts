@@ -101,7 +101,7 @@ Simulates a professional studio lighting setup by painting a warm spotlight onto
 
 ---
 
-## PRO PRESETS (Film Emulation LUTs)
+## PREMIUM PRESETS (Film Emulation LUTs)
 
 These six presets are precision film emulations. They apply a full color transformation based on the characteristics of real film stocks and processes. Each has the same three controls:
 
@@ -143,6 +143,26 @@ Controls:
 
 ---
 
+## COMPOSITE WORKSPACE
+
+The Composite Workspace is a separate mode for building images from multiple components — a background scene plus one or more subjects placed on top of it.
+
+**Background** — Upload any image to use as the scene. The background can have its own filter layer stack applied to it independently.
+
+**Subjects** — Add up to five subjects. Each subject is automatically background-removed using AI so only the person or object remains. Subjects are placed on top of the background and can be:
+- Dragged to any position on the canvas
+- Scaled up or down using the Scale slider or by typing a pixel width
+- Given their own independent filter layer stack
+- Refined with the brush mask editor (see below)
+
+**Brush Mask Editor** — Click "Edit Mask" on any subject to enter brush editing mode. Use Erase mode to paint away parts of the subject, and Restore mode to bring erased areas back. Adjust brush Size and Hardness in the toolbar. Undo and redo brush strokes with ⌘Z / ⌘⇧Z. Click Done to exit.
+
+**Overlay** — An optional fourth image that sits on top of all subjects and the background. The overlay has its own opacity slider, scale, position, and filter layer stack. Use it for texture overlays, light leaks, or any image element that should span the full composite.
+
+**Export** — Click Export Composite to render the finished image. Choose WebP, JPEG, or PNG. Optionally enter a target width to resize the output.
+
+---
+
 ## THE LAYER STACK
 
 Instead of applying a single preset to your image, you can stack multiple presets on top of each other. Each one is a layer, and they are processed sequentially from top to bottom — the output of one layer becomes the input of the next.
@@ -164,6 +184,8 @@ Each layer can have a mask that limits where its effect appears. There are two t
 **Color Range Mask** — Restricts the layer's effect to pixels of a specific color. You choose a color family (reds, oranges, yellows, greens, cyans, blues, or magentas). The Expansion control widens or narrows how broadly that hue is captured. Smoothness controls how gradually the effect fades at the edges of the hue range. You can invert the mask to affect everything except the chosen color.
 
 Both masks can be used at the same time on the same layer — only pixels that satisfy both conditions will be affected.
+
+In the Composite Workspace, subjects also support a brush-based mask editor for freehand refinement of the background removal result. This is separate from the luminosity and color range masks above, which apply to filter layers.
 
 ---
 

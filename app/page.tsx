@@ -20,6 +20,7 @@ import AiTutor from "@/components/AiTutor";
 import CompositeWorkspace from "@/components/CompositeWorkspace";
 import { useAuth } from "@/lib/auth-context";
 import AuthModal, { AuthMode, preservePendingLayers } from "@/components/AuthModal";
+import TutorialModal from "@/components/TutorialModal";
 
 type Params = Record<string, string | number | boolean>;
 
@@ -256,6 +257,7 @@ export default function Dashboard() {
   // Auth modal, the export waiting on auth to finish, and the top-bar menu.
   const [authMode, setAuthMode] = useState<AuthMode | null>(null);
   const [pendingExport, setPendingExport] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   // Shown when a layer stack persisted before the auth flow is restored.
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
@@ -682,8 +684,18 @@ export default function Dashboard() {
           );
         })}
 
-        {/* USER MENU — reads auth state from AuthContext */}
-        <div className="ml-auto relative">
+        {/* RIGHT-SIDE NAV GROUP */}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowTutorial(true)}
+            className="text-sm text-ink-200 hover:text-ink-100 transition px-3 py-1.5 rounded-md border border-ink-600 hover:border-ink-400"
+          >
+            Tutorial
+          </button>
+
+          {/* USER MENU — reads auth state from AuthContext */}
+          <div className="relative">
           {!user ? (
             <button
               type="button"
@@ -769,7 +781,8 @@ export default function Dashboard() {
               )}
             </>
           )}
-        </div>
+          </div>{/* end user menu */}
+        </div>{/* end right-side nav group */}
       </nav>
 
       {/* Restore banner — sits between the nav and the editor area */}
@@ -1212,6 +1225,11 @@ export default function Dashboard() {
           onClose={closeAuthModal}
           onAuthSuccess={handleAuthSuccess}
         />
+      )}
+
+      {/* TUTORIAL MODAL */}
+      {showTutorial && (
+        <TutorialModal onClose={() => setShowTutorial(false)} />
       )}
     </div>
   );
@@ -2811,7 +2829,7 @@ function ChevronIcon({ open }: { open: boolean }) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="text-ink-500 shrink-0 transition-transform"
+      className="text-ink-200 shrink-0 transition-transform"
       style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
       aria-hidden="true"
     >
