@@ -1,9 +1,9 @@
 {
-  "family": "image-filter-platform",
+  "family": "picmagiq",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "2048",
-  "memory": "4096",
+  "cpu": "1024",
+  "memory": "3072",
   "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
   "runtimePlatform": {
@@ -12,8 +12,8 @@
   },
   "containerDefinitions": [
     {
-      "name": "image-filter-platform",
-      "image": "<AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/<ECR_REPO_NAME>:latest",
+      "name": "picmagiq",
+      "image": "<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/picmagiq:latest",
       "essential": true,
       "portMappings": [
         {
@@ -26,13 +26,27 @@
       ],
       "environment": [
         { "name": "NODE_ENV", "value": "production" },
-        { "name": "PLAYWRIGHT_BROWSERS_PATH", "value": "/ms-playwright" }
+        { "name": "PLAYWRIGHT_BROWSERS_PATH", "value": "/ms-playwright" },
+        { "name": "NEXT_TELEMETRY_DISABLED", "value": "1" }
+      ],
+      "secrets": [
+        { "name": "NEXT_PUBLIC_SUPABASE_URL", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/NEXT_PUBLIC_SUPABASE_URL" },
+        { "name": "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" },
+        { "name": "SUPABASE_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/SUPABASE_SECRET_KEY" },
+        { "name": "ANTHROPIC_API_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/ANTHROPIC_API_KEY" },
+        { "name": "STRIPE_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/STRIPE_SECRET_KEY" },
+        { "name": "STRIPE_WEBHOOK_SECRET", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/STRIPE_WEBHOOK_SECRET" },
+        { "name": "STRIPE_BASIC_PRICE_ID", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/STRIPE_BASIC_PRICE_ID" },
+        { "name": "STRIPE_PREMIUM_PRICE_ID", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/STRIPE_PREMIUM_PRICE_ID" },
+        { "name": "NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID" },
+        { "name": "NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID" },
+        { "name": "NEXT_PUBLIC_APP_URL", "valueFrom": "arn:aws:ssm:us-east-1:<AWS_ACCOUNT_ID>:parameter/picmagiq/NEXT_PUBLIC_APP_URL" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/image-filter-platform",
-          "awslogs-region": "<AWS_REGION>",
+          "awslogs-group": "/ecs/picmagiq",
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs",
           "awslogs-create-group": "true"
         }

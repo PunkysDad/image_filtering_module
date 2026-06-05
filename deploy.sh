@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 #
-# Build and push the image-filter-platform Docker image to ECR, then roll
-# the ECS service. Variables can be supplied via environment; anything
-# missing will be prompted for interactively.
+# Build and push the picmagIQ Docker image to ECR, then roll the ECS service.
+# Variables can be supplied via environment; anything missing will be prompted.
 #
 # Required vars:
 #   AWS_REGION        e.g. us-east-1
 #   AWS_ACCOUNT_ID    12-digit account id
-#   ECR_REPO_NAME     e.g. image-filter-platform
-#   ECS_CLUSTER_NAME  e.g. image-filter-cluster
-#   ECS_SERVICE_NAME  e.g. image-filter-service
-
+#   ECR_REPO_NAME     e.g. picmagiq
+#   ECS_CLUSTER_NAME  e.g. picmagiq-cluster
+#   ECS_SERVICE_NAME  e.g. picmagiq-service
 set -euo pipefail
 
 prompt_if_unset() {
@@ -25,6 +23,11 @@ prompt_if_unset() {
     export "${var_name}=${value}"
   fi
 }
+
+AWS_REGION="${AWS_REGION:-us-east-1}"
+ECR_REPO_NAME="${ECR_REPO_NAME:-picmagiq}"
+ECS_CLUSTER_NAME="${ECS_CLUSTER_NAME:-picmagiq-cluster}"
+ECS_SERVICE_NAME="${ECS_SERVICE_NAME:-picmagiq-service}"
 
 prompt_if_unset AWS_REGION       "AWS_REGION (e.g. us-east-1)"
 prompt_if_unset AWS_ACCOUNT_ID   "AWS_ACCOUNT_ID (12-digit account id)"
@@ -49,9 +52,14 @@ docker build \
 
 echo "==> Pushing ${IMAGE_REPO}:${GIT_SHA}"
 docker push "${IMAGE_REPO}:${GIT_SHA}"
-
 echo "==> Pushing ${IMAGE_REPO}:latest"
 docker push "${IMAGE_REPO}:latest"
+
+echo "==> Registering task definition"
+aws ecs register-task-definition \
+  --region "${AWS_REGION}" \
+  --cli-input-json file://infra/task-definition.json \
+  > /dev/null
 
 echo "==> Forcing new deployment on ${ECS_CLUSTER_NAME}/${ECS_SERVICE_NAME}"
 aws ecs update-service \
