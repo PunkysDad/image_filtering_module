@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Image Filter Renderer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0b0b0d;
+        color: #d4d4dc;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        overflow: hidden;
+      }
+      #stage {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100vw;
+        height: 100vh;
+      }
+      /* For export, Playwright sizes the viewport to the canvas dimensions
+         and screenshots #stage. For preview, CSS scales the canvas to fit. */
+      #canvas {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      body.export-mode,
+      body.export-mode #stage {
+        width: auto;
+        height: auto;
+      }
+      body.export-mode #canvas {
+        max-width: none;
+        max-height: none;
+      }
+      #svgDefsHost {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+      #placeholder {
+        color: #6a6a78;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="canvas"></canvas>
+      <div id="placeholder">Waiting for image…</div>
+    </div>
+
+    <svg id="svgDefsHost" aria-hidden="true">
+      <defs id="svgDefs"></defs>
+    </svg>
+
+    <script src="/filters.js"></script>
+    <script>
+      // window.WebGLRenderer — GPU post-processing for pro presets.
+      // Sits on top of the SVG + Canvas 2D pipeline in filters.js. Never
+      // throws: init() returns false on any failure, apply() is a no-op if
+      // init hasn't succeeded. filters.js falls back silently.
+      (function (global) {
+        "use strict";
+
+        const R = {
+          canvas: null,
+          gl: null,
+          isWebGL2: false,
+          quadVbo: null,
+          vertexShader: null,
+          programs: Object.create(null), // type → {program, attribs, uniforms}
+          sourceTex: null,
+          pingTex: [null, null],
+          pingFbo: [null, null],
+          pingSize: { w: 0, h: 0 },
+          lutTex: null,
+          lutCacheKey: null,
+          initialized: false,
+          initFailed: false,
+        };
+
+        // -------------------- shader sources (GLSL 3.00 ES) --------------------
+
+        const VS_300 = `#version 300 es
+in vec2 a_position;
+in vec2 a_texCoord;
+out vec2 v_texCoord;
+void main() {
+  gl_Position = vec4(a_position, 0.0, 1.0);
+  v_texCoord = a_texCoord;
+}`;
+
+        const FS_LUT_300 = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform sampler2D u_lut;
+uniform float u_intensity;
+uniform float u_lutSize;
+in vec2 v_texCoord;
+out vec4 fragColor;
+
+vec4 applyLUT(vec4 color) {
+  float slicesPerRow = 8.0;
+  float zSlice0 = floor(color.b * (u_lutSize - 1.0));
+  float zSlice1 = min(zSlice0 + 1.0, u_lutSize - 1.0);
+  float zFraction = color.b * (u_lutSize - 1.0) - zSlice0;
+
+  float row0 = floor(zSlice0 / slicesPerRow);
+  float col0 = mod(zSlice0, slicesPerRow);
+  float row1 = floor(zSlice1 / slicesPerRow);
+  float col1 = mod(zSlice1, slicesPerRow);
+
+  vec2 uv0 = vec2(
+    (col0 * u_lutSize + color.r * (u_lutSize - 1.0) + 0.5) / (u_lutSize * slicesPerRow),
+    (row0 * u_lutSize + color.g * (u_lutSize - 1.0) + 0.5) / (u_lutSize * 4.0)
+  );
+  vec2 uv1 = vec2(
+    (col1 * u_lutSize + color.r * (u_lutSize - 1.0) + 0.5) / (u_lutSize * slicesPerRow),
+    (row1 * u_lutSize + color.g * (u_lutSize - 1.0) + 0.5) / (u_lutSize * 4.0)
+  );
+
+  vec4 lutColor = mix(texture(u_lut, uv0), texture(u_lut, uv1), zFraction);
+  return mix(color, lutColor, u_intensity);
+}
+
+void main() {
+  vec4 color = texture(u_image, v_texCoord);
+  fragColor = applyLUT(color);
+}`;
+
+        const FS_CHROMATIC_300 = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform float u_amount;
+uniform float u_falloffEdge;
+in vec2 v_texCoord;
+out vec4 fragColor;
+
+void main() {
+  vec2 p = v_texCoord - 0.5;
+  float dist = length(p) * 1.41421356; // 0..~1 at corners
+  float strength = u_amount * pow(clamp(dist, 0.0, 1.0), 1.5) * u_falloffEdge;
+  vec2 dir = dist > 0.0001 ? normalize(p) : vec2(0.0);
+  vec2 shift = dir * strength * 0.02;
+  float r = texture(u_image, v_texCoord + shift).r;
+  float g = texture(u_image, v_texCoord).g;
+  float b = texture(u_image, v_texCoord - shift).b;
+  float a = texture(u_image, v_texCoord).a;
+  fragColor = vec4(r, g, b, a);
+}`;
+
+        const FS_DISTORTION_300 = `#version 300 es
+precision highp float;
+uniform sampler2D u_image;
+uniform float u_amount;
+uniform float u_zoom;
+in vec2 v_texCoord;
+out vec4 fragColor;
+
+void main() {
+  vec2 centered = v_texCoord * 2.0 - 1.0;
+  float r2 = dot(centered, centered);
+  vec2 distorted = centered * (1.0 + u_amount * r2);
+  // Zoom compensation to hide empty edges.
+  distorted /= (1.0 + u_zoom * abs(u_amount));
+  vec2 uv = distorted * 0.5 + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+    fragColor = vec4(0.0, 0.0, 0.0, 0.0);
+  } else {
+    fragColor = texture(u_image, uv);
+  }
+}`;
+
+        // Zoom / radial motion blur. Pixels inside u_focal_radius stay sharp;
+        // pixels outside smoothly transition to full blur, sampled along the
+        // direction radiating away from u_focal_center.
+        const FS_FOCAL_BLUR_300 = `#version 300 es
+precision highp float;
+uniform sampler2D u_texture;
+uniform vec2 u_resolution;
+uniform vec2 u_focal_center;
+uniform float u_focal_radius;
+uniform float u_intensity;
+uniform int u_samples;
+in vec2 v_texCoord;
+out vec4 fragColor;
+
+void main() {
+  vec2 uv = v_texCoord;
+  vec2 toPixel = uv - u_focal_center;
+  float dist = length(toPixel);
+  vec2 dir = dist > 0.0001 ? toPixel / dist : vec2(0.0);
+
+  // Sharp inside the focal radius, ramping to full blur strength outside.
+  float blurStrength = smoothstep(u_focal_radius * 0.5, u_focal_radius, dist) * u_intensity;
+
+  vec4 base = texture(u_texture, uv);
+  if (blurStrength < 0.001) {
+    fragColor = base;
+    return;
+  }
+
+  // Fixed 16-sample zoom blur. Loop bound is a literal so the WebGL1 rewrite
+  // stays valid (GLSL ES 1.00 requires constant loop bounds).
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < 16; i++) {
+    float offset = (float(i) / 15.0 - 0.5) * blurStrength * 0.15;
+    vec2 sampleUV = clamp(uv + dir * offset * dist, 0.0, 1.0);
+    acc += texture(u_texture, sampleUV);
+  }
+  vec4 blurred = acc / 16.0;
+  fragColor = vec4(blurred.rgb, base.a);
+}`;
+
+        // -------------------- GLSL 3.00 → 1.00 ES rewrite (WebGL1 fallback) ----
+
+        function glslDown(src, stage) {
+          let s = src.replace(/^#version[^\n]*\n/, "");
+          s = s.replace(/\btexture\(/g, "texture2D(");
+          if (stage === "fragment") {
+            s = s.replace(/\bin\s+vec/g, "varying vec");
+            s = s.replace(/\bout\s+vec4\s+fragColor\s*;\s*/m, "");
+            s = s.replace(/\bfragColor\b/g, "gl_FragColor");
+          } else {
+            s = s.replace(/\bin\s+vec/g, "attribute vec");
+            s = s.replace(/\bout\s+vec/g, "varying vec");
+          }
+          return s;
+        }
+
+        const EFFECTS = {
+          lut: {
+            fs: FS_LUT_300,
+            uniforms: ["u_image", "u_lut", "u_intensity", "u_lutSize"],
+          },
+          chromaticAberration: {
+            fs: FS_CHROMATIC_300,
+            uniforms: ["u_image", "u_amount", "u_falloffEdge"],
+          },
+          focalBlur: {
+            fs: FS_FOCAL_BLUR_300,
+            uniforms: [
+              "u_texture",
+              "u_resolution",
+              "u_focal_center",
+              "u_focal_radius",
+              "u_intensity",
+              "u_samples",
+            ],
+          },
+        };
+
+        // -------------------- low-level helpers -------------------------------
+
+        function compile(gl, type, src) {
+          const sh = gl.createShader(type);
+          gl.shaderSource(sh, src);
+          gl.compileShader(sh);
+          if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+            const log = gl.getShaderInfoLog(sh);
+            gl.deleteShader(sh);
+            throw new Error("WebGL shader compile failed: " + log);
+          }
+          return sh;
+        }
+
+        function link(gl, vs, fs) {
+          const p = gl.createProgram();
+          gl.attachShader(p, vs);
+          gl.attachShader(p, fs);
+          gl.linkProgram(p);
+          if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+            const log = gl.getProgramInfoLog(p);
+            gl.deleteProgram(p);
+            throw new Error("WebGL program link failed: " + log);
+          }
+          return p;
+        }
+
+        function buildProgram(type) {
+          const gl = R.gl;
+          const def = EFFECTS[type];
+          if (!def) throw new Error("unknown WebGL effect: " + type);
+          const vsSrc = R.isWebGL2 ? VS_300 : glslDown(VS_300, "vertex");
+          const fsSrc = R.isWebGL2 ? def.fs : glslDown(def.fs, "fragment");
+          const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
+          const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
+          const program = link(gl, vs, fs);
+          gl.deleteShader(vs);
+          gl.deleteShader(fs);
+          const attribs = {
+            a_position: gl.getAttribLocation(program, "a_position"),
+            a_texCoord: gl.getAttribLocation(program, "a_texCoord"),
+          };
+          const uniforms = Object.create(null);
+          for (const name of def.uniforms) {
+            uniforms[name] = gl.getUniformLocation(program, name);
+          }
+          return { program, attribs, uniforms };
+        }
+
+        function ensureProgram(type) {
+          if (!R.programs[type]) R.programs[type] = buildProgram(type);
+          return R.programs[type];
+        }
+
+        function createTexture(w, h) {
+          const gl = R.gl;
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texImage2D(
+            gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null,
+          );
+          return tex;
+        }
+
+        function createFramebuffer(tex) {
+          const gl = R.gl;
+          const fb = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+          gl.framebufferTexture2D(
+            gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0,
+          );
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          return fb;
+        }
+
+        function ensurePingPong(w, h) {
+          if (R.pingSize.w === w && R.pingSize.h === h && R.pingTex[0]) return;
+          const gl = R.gl;
+          // Destroy existing, if any.
+          for (let i = 0; i < 2; i++) {
+            if (R.pingTex[i]) gl.deleteTexture(R.pingTex[i]);
+            if (R.pingFbo[i]) gl.deleteFramebuffer(R.pingFbo[i]);
+          }
+          R.pingTex[0] = createTexture(w, h);
+          R.pingTex[1] = createTexture(w, h);
+          R.pingFbo[0] = createFramebuffer(R.pingTex[0]);
+          R.pingFbo[1] = createFramebuffer(R.pingTex[1]);
+          R.pingSize.w = w;
+          R.pingSize.h = h;
+        }
+
+        // Pack a Float32Array LUT (32³×3) into an RGBA UNSIGNED_BYTE atlas.
+        function uploadLut(gl, lutData, lutSize) {
+          const slicesPerRow = 8;
+          const rows = Math.ceil(lutSize / slicesPerRow);
+          const texW = lutSize * slicesPerRow;
+          const texH = lutSize * rows;
+          const bytes = new Uint8Array(texW * texH * 4);
+          for (let b = 0; b < lutSize; b++) {
+            const sliceRow = Math.floor(b / slicesPerRow);
+            const sliceCol = b % slicesPerRow;
+            for (let g = 0; g < lutSize; g++) {
+              for (let r = 0; r < lutSize; r++) {
+                const src = (b * lutSize * lutSize + g * lutSize + r) * 3;
+                const dstX = sliceCol * lutSize + r;
+                const dstY = sliceRow * lutSize + g;
+                const dst = (dstY * texW + dstX) * 4;
+                bytes[dst]     = Math.max(0, Math.min(255, Math.round(lutData[src]     * 255)));
+                bytes[dst + 1] = Math.max(0, Math.min(255, Math.round(lutData[src + 1] * 255)));
+                bytes[dst + 2] = Math.max(0, Math.min(255, Math.round(lutData[src + 2] * 255)));
+                bytes[dst + 3] = 255;
+              }
+            }
+          }
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.texImage2D(
+            gl.TEXTURE_2D, 0, gl.RGBA, texW, texH, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes,
+          );
+          return tex;
+        }
+
+        function bindQuad(pr) {
+          const gl = R.gl;
+          gl.bindBuffer(gl.ARRAY_BUFFER, R.quadVbo);
+          // Interleaved: x y u v
+          const stride = 4 * 4;
+          if (pr.attribs.a_position >= 0) {
+            gl.enableVertexAttribArray(pr.attribs.a_position);
+            gl.vertexAttribPointer(pr.attribs.a_position, 2, gl.FLOAT, false, stride, 0);
+          }
+          if (pr.attribs.a_texCoord >= 0) {
+            gl.enableVertexAttribArray(pr.attribs.a_texCoord);
+            gl.vertexAttribPointer(pr.attribs.a_texCoord, 2, gl.FLOAT, false, stride, 8);
+          }
+        }
+
+        // -------------------- public API --------------------------------------
+
+        function init(sourceCanvas) {
+          if (R.initialized) return true;
+          if (R.initFailed) return false;
+          try {
+            // Offscreen WebGL canvas. preserveDrawingBuffer so we can
+            // drawImage() it from 2D contexts after the GL draw completes.
+            const glCanvas = document.createElement("canvas");
+            glCanvas.width = sourceCanvas ? sourceCanvas.width || 1 : 1;
+            glCanvas.height = sourceCanvas ? sourceCanvas.height || 1 : 1;
+            const attrs = {
+              premultipliedAlpha: false,
+              preserveDrawingBuffer: true,
+              antialias: false,
+              alpha: true,
+            };
+            let gl = glCanvas.getContext("webgl2", attrs);
+            let isWebGL2 = !!gl;
+            if (!gl) gl = glCanvas.getContext("webgl", attrs) || glCanvas.getContext("experimental-webgl", attrs);
+            if (!gl) {
+              console.warn("[WebGLRenderer] no WebGL context available");
+              R.initFailed = true;
+              return false;
+            }
+            R.canvas = glCanvas;
+            R.gl = gl;
+            R.isWebGL2 = isWebGL2;
+
+            // Full-screen quad (triangle strip) — interleaved x,y,u,v.
+            const quad = new Float32Array([
+              -1, -1, 0, 0,
+               1, -1, 1, 0,
+              -1,  1, 0, 1,
+               1,  1, 1, 1,
+            ]);
+            R.quadVbo = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, R.quadVbo);
+            gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+            R.initialized = true;
+            console.log(
+              "[WebGLRenderer] initialized",
+              isWebGL2 ? "(WebGL2)" : "(WebGL1 fallback)",
+            );
+            return true;
+          } catch (err) {
+            console.warn("[WebGLRenderer] init threw:", err && err.message);
+            R.initFailed = true;
+            return false;
+          }
+        }
+
+        function apply(sourceCanvas, effects) {
+          if (!R.initialized || !effects || effects.length === 0) return false;
+          const gl = R.gl;
+          const w = sourceCanvas.width;
+          const h = sourceCanvas.height;
+          if (w <= 0 || h <= 0) return false;
+
+          try {
+            R.canvas.width = w;
+            R.canvas.height = h;
+            gl.viewport(0, 0, w, h);
+
+            // 1. Upload source canvas → sourceTex (Y-flipped, so tc(0,0)=
+            //    canvas bottom-left = NDC bottom-left = canvas bottom-left on
+            //    output → image stays upright all the way through).
+            if (!R.sourceTex) R.sourceTex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, R.sourceTex);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texImage2D(
+              gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas,
+            );
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+            // 2. Ping-pong setup for multi-pass; skipped if single effect.
+            const multi = effects.length > 1;
+            if (multi) ensurePingPong(w, h);
+
+            // First pass reads from source. Later passes alternate ping/pong.
+            // Final pass writes to default framebuffer (R.canvas).
+            let readSource = "source"; // "source" | 0 | 1
+            let writeIndex = 0; // 0 | 1 (ignored on final pass)
+
+            for (let i = 0; i < effects.length; i++) {
+              const eff = effects[i];
+              const isFinal = i === effects.length - 1;
+              const pr = ensureProgram(eff.type);
+              gl.useProgram(pr.program);
+              bindQuad(pr);
+
+              // Bind input texture to unit 0.
+              gl.activeTexture(gl.TEXTURE0);
+              if (readSource === "source") {
+                gl.bindTexture(gl.TEXTURE_2D, R.sourceTex);
+              } else {
+                gl.bindTexture(gl.TEXTURE_2D, R.pingTex[readSource]);
+              }
+              if (pr.uniforms.u_image) gl.uniform1i(pr.uniforms.u_image, 0);
+
+              // Effect-specific uniforms.
+              setEffectUniforms(pr, eff);
+
+              // Bind target framebuffer.
+              if (isFinal) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              } else {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, R.pingFbo[writeIndex]);
+              }
+              gl.viewport(0, 0, w, h);
+              gl.clearColor(0, 0, 0, 0);
+              gl.clear(gl.COLOR_BUFFER_BIT);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+              // Prepare for next pass.
+              if (!isFinal) {
+                readSource = writeIndex;
+                writeIndex = 1 - writeIndex;
+              }
+            }
+
+            // 3. Copy GL canvas back onto the source 2D canvas. We do NOT
+            //    clearRect first — opaque WebGL output overwrites naturally,
+            //    and transparent regions (e.g. outside the distorted lens)
+            //    preserve the underlying Canvas 2D content.
+            const ctx = sourceCanvas.getContext("2d");
+            ctx.drawImage(R.canvas, 0, 0);
+            return true;
+          } catch (err) {
+            console.warn("[WebGLRenderer] apply threw:", err && err.message);
+            return false;
+          }
+        }
+
+        function setEffectUniforms(pr, eff) {
+          const gl = R.gl;
+          const p = eff.params || {};
+          const u = pr.uniforms;
+          switch (eff.type) {
+            case "lut": {
+              // CRITICAL: switch to unit 1 BEFORE uploading or binding. The
+              // apply() loop left the active unit at TEXTURE0 with R.sourceTex
+              // bound; if we bind/upload here without switching first, the new
+              // LUT texture overwrites R.sourceTex on unit 0 and the shader
+              // ends up sampling the LUT atlas as u_image (the bug that
+              // rendered a grid of colored slices instead of the filtered
+              // image).
+              gl.activeTexture(gl.TEXTURE1);
+              if (R.lutCacheKey !== p.lutData) {
+                if (R.lutTex) gl.deleteTexture(R.lutTex);
+                R.lutTex = uploadLut(gl, p.lutData, p.lutSize || 32);
+                R.lutCacheKey = p.lutData;
+              } else {
+                gl.bindTexture(gl.TEXTURE_2D, R.lutTex);
+              }
+              if (u.u_lut) gl.uniform1i(u.u_lut, 1);
+              if (u.u_intensity) gl.uniform1f(u.u_intensity, Math.max(0, Math.min(1, p.intensity ?? 1)));
+              if (u.u_lutSize) gl.uniform1f(u.u_lutSize, p.lutSize || 32);
+              // Restore unit 0 as active so subsequent effect passes (and the
+              // next iteration's source bind) behave predictably.
+              gl.activeTexture(gl.TEXTURE0);
+              break;
+            }
+            case "chromaticAberration":
+              if (u.u_amount) gl.uniform1f(u.u_amount, Math.max(0, Math.min(1, p.amount ?? 0)));
+              if (u.u_falloffEdge) gl.uniform1f(u.u_falloffEdge, p.falloffEdge ?? 1);
+              break;
+            case "focalBlur": {
+              // Source texture is already bound to unit 0 by apply().
+              if (u.u_texture) gl.uniform1i(u.u_texture, 0);
+              if (u.u_resolution) gl.uniform2f(u.u_resolution, R.canvas.width, R.canvas.height);
+              const fc = p.focalCenter || { x: 0.5, y: 0.5 };
+              // The source is uploaded Y-flipped (UNPACK_FLIP_Y_WEBGL), so the
+              // top-down focal Y from the preview maps to 1 - y in texture space.
+              if (u.u_focal_center) gl.uniform2f(u.u_focal_center, fc.x ?? 0.5, 1.0 - (fc.y ?? 0.5));
+              if (u.u_focal_radius) gl.uniform1f(u.u_focal_radius, p.focalRadius ?? 0.3);
+              if (u.u_intensity) gl.uniform1f(u.u_intensity, Math.max(0, Math.min(1, p.intensity ?? 0.5)));
+              if (u.u_samples) gl.uniform1i(u.u_samples, 16);
+              break;
+            }
+          }
+        }
+
+        global.WebGLRenderer = { init, apply };
+      })(typeof window !== "undefined" ? window : this);
+    </script>
+    <script>
+      console.log("[render.html] script loaded", {
+        search: location.search,
+        hasImageFilters: !!window.ImageFilters,
+      });
+      (function () {
+        "use strict";
+        const canvas = document.getElementById("canvas");
+        const svgDefs = document.getElementById("svgDefs");
+        const placeholder = document.getElementById("placeholder");
+        const baseImg = new Image();
+        const overlayImg = new Image();
+
+        let currentBaseUrl = null;
+        let currentOverlayUrl = null;
+        let renderToken = 0;
+
+        async function loadIntoImage(img, url, which) {
+          const cur = which === "base" ? currentBaseUrl : currentOverlayUrl;
+          if (url === cur && img.complete && img.naturalWidth > 0) return;
+          if (which === "base") currentBaseUrl = url;
+          else currentOverlayUrl = url;
+          await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = reject;
+            img.src = url;
+          });
+        }
+
+        // Draw the knockout-text mask into the overlay canvas using
+        // `destination-out`, which erases the overlay where the glyphs cover.
+        function applyKnockoutText(targetCanvas, opts) {
+          const text = String(opts.text || "");
+          if (!text.trim()) return;
+          const w = targetCanvas.width;
+          const h = targetCanvas.height;
+          const ctx = targetCanvas.getContext("2d");
+          const sizePct =
+            typeof opts.textSize === "number" ? opts.textSize : 15;
+          const fontSize = Math.max(1, Math.round((w * sizePct) / 100));
+          const weight =
+            typeof opts.fontWeight === "number" ? opts.fontWeight : 900;
+          const spacingEm = (opts.letterSpacing || 0) / 10;
+          const pos = opts.textPosition || { x: 50, y: 50 };
+          const cx = ((typeof pos.x === "number" ? pos.x : 50) / 100) * w;
+          const cy = ((typeof pos.y === "number" ? pos.y : 50) / 100) * h;
+
+          ctx.save();
+          ctx.font = `${weight} ${fontSize}px "Inter", system-ui, -apple-system, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          // Chromium supports ctx.letterSpacing; other engines silently ignore.
+          try {
+            ctx.letterSpacing = `${spacingEm}em`;
+          } catch (_) {}
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.fillStyle = "rgba(0,0,0,1)";
+          ctx.fillText(text, cx, cy);
+          ctx.globalCompositeOperation = "source-over";
+          ctx.restore();
+        }
+
+        // Wait for Inter (and any other webfonts) to be ready. Chromium
+        // resolves this promise after load failures too, so this is safe even
+        // offline (render-worker headless) — we just fall back to system-ui.
+        // Capped at 3s so a hung connection can't block a render indefinitely.
+        async function awaitFontsReady() {
+          if (!document.fonts || !document.fonts.ready) return;
+          const timeout = new Promise((r) => setTimeout(r, 3000));
+          try {
+            await Promise.race([document.fonts.ready, timeout]);
+          } catch (_) {}
+        }
+
+        async function render(cfg) {
+          const myToken = ++renderToken;
+          window.renderComplete = false;
+          document.body.removeAttribute("data-render-complete");
+          try {
+            await loadIntoImage(baseImg, cfg.imageUrl, "base");
+            const overlayWanted =
+              typeof cfg.overlayImageUrl === "string" &&
+              cfg.overlayImageUrl.length > 0;
+            if (overlayWanted) {
+              await loadIntoImage(overlayImg, cfg.overlayImageUrl, "overlay");
+            } else {
+              currentOverlayUrl = null;
+            }
+
+            const hasKnockout =
+              overlayWanted &&
+              typeof cfg.knockoutText === "string" &&
+              cfg.knockoutText.trim().length > 0;
+            if (hasKnockout) await awaitFontsReady();
+
+            if (myToken !== renderToken) return;
+
+            await window.ImageFilters.renderScene({
+              img: baseImg,
+              svgDefs,
+              canvas,
+              preset: cfg.preset,
+              params: cfg.params || {},
+              seed: typeof cfg.seed === "number" ? cfg.seed : 1,
+              overlay: overlayWanted
+                ? {
+                    img: overlayImg,
+                    preset: cfg.overlayPreset || "film-grain",
+                    params: cfg.overlayParams || {},
+                  }
+                : null,
+              knockout: hasKnockout
+                ? {
+                    text: cfg.knockoutText,
+                    textSize: cfg.textSize,
+                    textPosition: cfg.textPosition,
+                    letterSpacing: cfg.letterSpacing,
+                    fontWeight: cfg.fontWeight,
+                  }
+                : null,
+              applyKnockoutText,
+            });
+            if (myToken !== renderToken) return;
+
+            placeholder.style.display = "none";
+            canvas.style.display = "block";
+            await new Promise((r) => requestAnimationFrame(() => r()));
+            if (myToken !== renderToken) return;
+            window.renderComplete = true;
+            document.body.setAttribute("data-render-complete", "true");
+            window.parent &&
+              window.parent !== window &&
+              window.parent.postMessage(
+                { type: "rendered", width: canvas.width, height: canvas.height },
+                "*",
+              );
+          } catch (err) {
+            window.renderError = String(err && err.message ? err.message : err);
+            console.warn("[render.html] render failed:", window.renderError);
+            window.parent &&
+              window.parent !== window &&
+              window.parent.postMessage(
+                { type: "error", message: window.renderError },
+                "*",
+              );
+          }
+        }
+
+        function normalizeRenderPayload(data) {
+          return {
+            imageUrl: data.imageUrl,
+            preset: data.preset,
+            params: data.params,
+            seed: data.seed,
+            overlayImageUrl: data.overlayImageUrl || null,
+            overlayPreset: data.overlayPreset || null,
+            overlayParams: data.overlayParams || null,
+            knockoutText: data.knockoutText || null,
+            textSize: typeof data.textSize === "number" ? data.textSize : 15,
+            textPosition: data.textPosition || { x: 50, y: 50 },
+            letterSpacing:
+              typeof data.letterSpacing === "number" ? data.letterSpacing : 0,
+            fontWeight:
+              typeof data.fontWeight === "number" ? data.fontWeight : 900,
+          };
+        }
+
+        // Dashboard iframe path: receive params via postMessage
+        window.addEventListener("message", (e) => {
+          const data = e.data || {};
+          if (data.type !== "render") return;
+          console.log("[render.html] render message received", {
+            imageUrl: data.imageUrl,
+            preset: data.preset,
+            hasOverlay: !!data.overlayImageUrl,
+            hasKnockout: !!(data.knockoutText && String(data.knockoutText).trim()),
+          });
+          render(normalizeRenderPayload(data));
+        });
+
+        // Playwright export path: params on the URL
+        function parseUrlParams() {
+          const q = new URLSearchParams(location.search);
+          const imageUrl = q.get("image");
+          const preset = q.get("preset");
+          if (!imageUrl || !preset) return null;
+          const parseJson = (s, fallback) => {
+            if (!s) return fallback;
+            try {
+              return JSON.parse(s);
+            } catch (_) {
+              return fallback;
+            }
+          };
+          const seedStr = q.get("seed");
+          return normalizeRenderPayload({
+            imageUrl,
+            preset,
+            params: parseJson(q.get("params"), {}),
+            seed: seedStr ? parseInt(seedStr, 10) : 1,
+            overlayImageUrl: q.get("overlayImage") || null,
+            overlayPreset: q.get("overlayPreset") || null,
+            overlayParams: parseJson(q.get("overlayParams"), null),
+            knockoutText: q.get("knockoutText") || null,
+            textSize: q.get("textSize")
+              ? parseFloat(q.get("textSize"))
+              : undefined,
+            textPosition: parseJson(q.get("textPosition"), undefined),
+            letterSpacing: q.get("letterSpacing")
+              ? parseFloat(q.get("letterSpacing"))
+              : undefined,
+            fontWeight: q.get("fontWeight")
+              ? parseFloat(q.get("fontWeight"))
+              : undefined,
+          });
+        }
+
+        const urlConfig = parseUrlParams();
+        if (urlConfig) {
+          document.body.classList.add("export-mode");
+          render(urlConfig);
+        } else {
+          window.parent &&
+            window.parent !== window &&
+            window.parent.postMessage({ type: "ready" }, "*");
+        }
+      })();
+    </script>
+  </body>
+</html>
