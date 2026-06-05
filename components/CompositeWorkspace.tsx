@@ -91,7 +91,8 @@ type LayerAction =
   | { type: "set-intensity"; id: string; intensity: number }
   | { type: "set-mask";   id: string; mask: LayerMask }
   | { type: "set-curves"; id: string; curves: LayerCurves }
-  | { type: "reorder"; from: number; to: number };
+  | { type: "reorder"; from: number; to: number }
+  | { type: "restore"; layers: FilterLayer[] };
 
 function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[] {
   switch (action.type) {
@@ -122,6 +123,7 @@ function layersReducer(state: FilterLayer[], action: LayerAction): FilterLayer[]
       next.splice(action.to, 0, moved);
       return next;
     }
+    case "restore": return action.layers;
     default: return state;
   }
 }
@@ -133,6 +135,16 @@ type CompositeSubject = {
   layers: FilterLayer[];
   position: { x: number; y: number };
   scale: number;
+};
+
+// A single global overlay image drawn on top of the background and all
+// subjects in the composite stack.
+type CompositeOverlay = {
+  imagePath: string;          // /uploads/... of the uploaded overlay image
+  layers: FilterLayer[];      // filter stack (same FilterLayer type as subjects)
+  opacity: number;            // 0–1, default 1.0
+  position: { x: number; y: number }; // px offset from center, default {x:0,y:0}
+  scale: number;              // size multiplier, default 1.0
 };
 
 type SubjectsAction =
@@ -601,7 +613,11 @@ function SelectionCanvas({
 // Main composite workspace
 // ============================================================
 
-export default function CompositeWorkspace() {
+export default function CompositeWorkspace({
+  onExportReady,
+}: {
+  onExportReady: (url: string, filename: string) => void;
+}) {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // Background
@@ -632,6 +648,7 @@ export default function CompositeWorkspace() {
   const bgIframeRef        = useRef<HTMLIFrameElement>(null);
   const subIframeRef       = useRef<HTMLIFrameElement>(null);
   const compositeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const hasCompositeRef    = useRef(false);
   const bgOffscreen        = useRef<HTMLCanvasElement | null>(null);
   const dragSrcIdxBg       = useRef<number | null>(null);
 
@@ -660,9 +677,24 @@ export default function CompositeWorkspace() {
 
   // Export
   const [exporting, setExporting]     = useState(false);
-  const [exportUrl, setExportUrl]     = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<"webp" | "jpeg" | "png">("webp");
+  const [compositeExportWidth, setCompositeExportWidth] = useState<string>("");
+
+  // Overlay (global topmost layer)
+  const [overlay, setOverlay] = useState<CompositeOverlay | null>(null);
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [overlayLayers, dispatchOverlayLayers] = useReducer(layersReducer, []);
+  const [overlayActiveLayerId, setOverlayActiveLayerId] = useState<string | null>(null);
+  const [overlayShowPresetModal, setOverlayShowPresetModal] = useState(false);
+  const overlayRef        = useRef<CompositeOverlay | null>(null);
+  const overlayOffscreen  = useRef<HTMLCanvasElement | null>(null);
+  const overlayIframeRef  = useRef<HTMLIFrameElement | null>(null);
+  const overlayFileRef    = useRef<HTMLInputElement | null>(null);
+  const dragSrcIdxOverlay = useRef<number | null>(null);
+  const overlayDragging   = useRef(false);
+  const overlayDragStart  = useRef<{ mx: number; my: number; ox: number; oy: number } | null>(null);
+  const debouncedOverlayLayers = useDebouncedValue(overlayLayers, 300);
 
   const bgActiveLayer = bgLayers.find((l) => l.id === bgActiveLayerId) ?? bgLayers[0] ?? null;
 
@@ -671,7 +703,9 @@ export default function CompositeWorkspace() {
 
   subjectsRef.current      = subjects;
   activeSubjectIdRef.current = activeSubjectId;
+  overlayRef.current       = overlay;
   const activeSubject      = subjects.find((s) => s.id === activeSubjectId) ?? subjects[0] ?? null;
+  const overlayActiveLayer = overlayLayers.find((l) => l.id === overlayActiveLayerId) ?? overlayLayers[0] ?? null;
 
   // Sync bg active layer ID on removal
   useEffect(() => {
@@ -679,6 +713,13 @@ export default function CompositeWorkspace() {
     if (!bgLayers.find((l) => l.id === bgActiveLayerId))
       setBgActiveLayerId(bgLayers[bgLayers.length - 1].id);
   }, [bgLayers, bgActiveLayerId]);
+
+  // Sync overlay active layer ID on removal
+  useEffect(() => {
+    if (!overlayLayers.length) { setOverlayActiveLayerId(null); return; }
+    if (!overlayLayers.find((l) => l.id === overlayActiveLayerId))
+      setOverlayActiveLayerId(overlayLayers[overlayLayers.length - 1].id);
+  }, [overlayLayers, overlayActiveLayerId]);
 
   // Sync active subject ID when subjects change
   useEffect(() => {
@@ -741,7 +782,24 @@ export default function CompositeWorkspace() {
         }
       }
     }
-    setHasComposite(true);
+
+    // Global overlay, drawn last (topmost), with its own opacity.
+    const ovl = overlayRef.current;
+    const ovlC = overlayOffscreen.current;
+    if (ovl && ovlC && ovlC.width) {
+      const oW = ovlC.width * ovl.scale;
+      const oH = ovlC.height * ovl.scale;
+      const oX = bgC.width / 2 + ovl.position.x - oW / 2;
+      const oY = bgC.height / 2 + ovl.position.y - oH / 2;
+      ctx.globalAlpha = ovl.opacity;
+      ctx.drawImage(ovlC, oX, oY, oW, oH);
+      ctx.globalAlpha = 1;
+    }
+
+    if (!hasCompositeRef.current) {
+      hasCompositeRef.current = true;
+      setHasComposite(true);
+    }
   }, []);
 
   const copyIframeCanvas = useCallback(
@@ -811,10 +869,23 @@ export default function CompositeWorkspace() {
           subIframeReadyRef.current = true;
           setSubIframeReady(true);
         }
+        if (e.source === overlayIframeRef.current?.contentWindow) {
+          const ovl = overlayRef.current;
+          if (ovl) {
+            overlayIframeRef.current?.contentWindow?.postMessage(
+              { type: "render", imageUrl: ovl.imagePath, layers: overlayLayers.map(layerMsg), seed: 1 },
+              "*",
+            );
+          }
+        }
       }
       if (e.data.type === "rendered") {
         if (e.source === bgIframeRef.current?.contentWindow) {
           copyIframeCanvas(bgIframeRef, bgOffscreen);
+          redrawComposite();
+        }
+        if (e.source === overlayIframeRef.current?.contentWindow) {
+          copyIframeCanvas(overlayIframeRef, overlayOffscreen);
           redrawComposite();
         }
         if (e.source === subIframeRef.current?.contentWindow) {
@@ -832,7 +903,7 @@ export default function CompositeWorkspace() {
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [copyIframeCanvas, copySubIframeToSubject, redrawComposite, processRenderQueue]);
+  }, [copyIframeCanvas, copySubIframeToSubject, redrawComposite, processRenderQueue, overlayLayers]);
 
   // Send bg render messages when layers/image change
   useEffect(() => {
@@ -842,6 +913,16 @@ export default function CompositeWorkspace() {
       "*",
     );
   }, [bgIframeReady, bgPath, debouncedBgLayers, currentStep]);
+
+  // Send overlay render messages when its layers/image change
+  useEffect(() => {
+    if (!overlay || !overlayIframeRef.current?.contentWindow) return;
+    overlayIframeRef.current.contentWindow.postMessage(
+      { type: "render", imageUrl: overlay.imagePath, layers: debouncedOverlayLayers.map(layerMsg), seed: 1 },
+      "*",
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedOverlayLayers, overlay?.imagePath]);
 
   // Enqueue subject re-renders when debounced subjects change
   useEffect(() => {
@@ -861,6 +942,9 @@ export default function CompositeWorkspace() {
 
   useEffect(() => { redrawComposite(); }, [subjects, redrawComposite]);
 
+  // Redraw when the overlay's opacity/scale/position (or presence) changes.
+  useEffect(() => { redrawComposite(); }, [overlay, redrawComposite]);
+
   // ---------- Background upload ----------
 
   const onUploadBackground = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -871,6 +955,24 @@ export default function CompositeWorkspace() {
       setBgPath(await uploadFile(file));
     } finally {
       setUploadingBg(false);
+    }
+  };
+
+  // ---------- Overlay upload ----------
+
+  const onUploadOverlay = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const imagePath = await uploadFile(file);
+      setOverlay({ imagePath, layers: [], opacity: 1.0, position: { x: 0, y: 0 }, scale: 1.0 });
+      dispatchOverlayLayers({ type: "restore", layers: [] });
+      setOverlayOpen(true);
+    } catch {
+      // Upload errors are surfaced elsewhere; keep overlay unset on failure.
+    } finally {
+      // Allow re-selecting the same file later.
+      if (overlayFileRef.current) overlayFileRef.current.value = "";
     }
   };
 
@@ -1114,6 +1216,22 @@ export default function CompositeWorkspace() {
         }
       }
 
+      // Overlay hit test (topmost) — only reached if no subject was hit.
+      const ovl = overlayRef.current;
+      const ovlC = overlayOffscreen.current;
+      if (ovl && ovlC && ovlC.width) {
+        const oW = ovlC.width  * ovl.scale;
+        const oH = ovlC.height * ovl.scale;
+        const oX = bgC.width  / 2 + ovl.position.x - oW / 2;
+        const oY = bgC.height / 2 + ovl.position.y - oH / 2;
+        if (cx >= oX && cx <= oX + oW && cy >= oY && cy <= oY + oH) {
+          e.preventDefault();
+          overlayDragging.current = true;
+          overlayDragStart.current = { mx: e.clientX, my: e.clientY, ox: ovl.position.x, oy: ovl.position.y };
+          return;
+        }
+      }
+
       // No subject hit — deselect and remove the outline immediately
       activeSubjectIdRef.current = null;
       setActiveSubjectId(null);
@@ -1150,6 +1268,23 @@ export default function CompositeWorkspace() {
         return;
       }
 
+      // Overlay drag
+      if (overlayDragging.current && overlayDragStart.current) {
+        e.preventDefault();
+        const canvas = compositeCanvasRef.current;
+        if (!canvas) return;
+        const rect   = canvas.getBoundingClientRect();
+        const scaleX = canvas.width  / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const dx = (e.clientX - overlayDragStart.current.mx) * scaleX;
+        const dy = (e.clientY - overlayDragStart.current.my) * scaleY;
+        const nx = overlayDragStart.current.ox + dx;
+        const ny = overlayDragStart.current.oy + dy;
+        setOverlay((prev) => prev ? { ...prev, position: { x: nx, y: ny } } : null);
+        redrawComposite();
+        return;
+      }
+
       if (!isDragging.current || !dragStartPos.current || !draggingSubjId.current) return;
       e.preventDefault();
       const canvas = compositeCanvasRef.current;
@@ -1165,7 +1300,7 @@ export default function CompositeWorkspace() {
         position: { x: dragStartPos.current.ox + dx, y: dragStartPos.current.oy + dy },
       });
     },
-    [applyBrushAt],
+    [applyBrushAt, redrawComposite],
   );
 
   const onPreviewMouseUp = useCallback(() => {
@@ -1176,6 +1311,8 @@ export default function CompositeWorkspace() {
     isDragging.current = false;
     draggingSubjId.current = null;
     dragStartPos.current = null;
+    overlayDragging.current = false;
+    overlayDragStart.current = null;
   }, []);
 
   const onPreviewMouseLeave = useCallback(() => {
@@ -1187,6 +1324,8 @@ export default function CompositeWorkspace() {
     isDragging.current = false;
     draggingSubjId.current = null;
     dragStartPos.current = null;
+    overlayDragging.current = false;
+    overlayDragStart.current = null;
   }, []);
 
   // ---------- Export ----------
@@ -1201,17 +1340,34 @@ export default function CompositeWorkspace() {
     const ext = exportFormat === "jpeg" ? "jpg" : exportFormat;
     setExporting(true);
     setExportError(null);
-    setExportUrl(null);
     redrawComposite(true);
-    canvas.toBlob(
+
+    const sourceCanvas = compositeCanvasRef.current;
+    if (!sourceCanvas) return;
+
+    const targetWidth = compositeExportWidth ? Number(compositeExportWidth) : null;
+
+    let exportCanvas: HTMLCanvasElement;
+    if (targetWidth && targetWidth > 0 && targetWidth !== sourceCanvas.width) {
+      const ratio = targetWidth / sourceCanvas.width;
+      const targetHeight = Math.round(sourceCanvas.height * ratio);
+      exportCanvas = document.createElement("canvas");
+      exportCanvas.width = targetWidth;
+      exportCanvas.height = targetHeight;
+      const ctx = exportCanvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+    } else {
+      exportCanvas = sourceCanvas;
+    }
+
+    exportCanvas.toBlob(
       (blob) => {
         redrawComposite(false);
         setExporting(false);
         if (!blob) { setExportError("Export failed — canvas was empty."); return; }
-        const url = URL.createObjectURL(blob);
-        setExportUrl(url);
-        const a = document.createElement("a");
-        a.href = url; a.download = `composite.${ext}`; a.click();
+        const objectUrl = URL.createObjectURL(blob);
+        onExportReady(objectUrl, `composite.${ext}`);
       },
       mime,
       0.92,
@@ -1245,6 +1401,12 @@ export default function CompositeWorkspace() {
             src="/render.html"
             title="Subject render"
             onLoad={() => setSubIframeReady(true)}
+            style={{ position: "absolute", left: "-9999px", top: "-9999px", width: "1px", height: "1px" }}
+          />
+          <iframe
+            ref={overlayIframeRef}
+            src="/render.html"
+            title="overlay-renderer"
             style={{ position: "absolute", left: "-9999px", top: "-9999px", width: "1px", height: "1px" }}
           />
         </>
@@ -1351,22 +1513,132 @@ export default function CompositeWorkspace() {
                       dispatchSubjects({ type: "remove", id: subj.id });
                     }}
                     onLayerAction={(action) => dispatchSubjects({ type: "layer", id: subj.id, action })}
-                    canRemove={subjects.length > 1}
+                    canRemove={true}
                     onEditMask={() => enterMaskEdit(subj.id)}
                     isMaskEditing={maskEditUI?.subjectId === subj.id}
                   />
                 ))}
               </div>
+
+              {/* Overlay section */}
+              <div className="rounded-md border border-ink-600 overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2.5 bg-ink-700/60">
+                  <span className="flex-1 text-xs font-semibold text-ink-100">Overlay</span>
+                  {!overlay ? (
+                    <>
+                      <input
+                        ref={overlayFileRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={onUploadOverlay}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => overlayFileRef.current?.click()}
+                        className="text-[11px] font-medium px-2 py-0.5 rounded border border-accent-500/50 text-accent-400 hover:bg-accent-500/10 transition"
+                      >
+                        + Upload
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOverlay(null);
+                        dispatchOverlayLayers({ type: "restore", layers: [] });
+                        overlayOffscreen.current = null;
+                        redrawComposite();
+                      }}
+                      className="text-ink-200 hover:text-red-400 transition text-base leading-none shrink-0"
+                      title="Remove overlay"
+                      aria-label="Remove overlay"
+                    >
+                      ×
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setOverlayOpen((v) => !v)} className="shrink-0">
+                    <ChevronIcon open={overlayOpen} />
+                  </button>
+                </div>
+                {overlayOpen && overlay && (
+                  <div className="p-3 border-t border-ink-600 bg-ink-800">
+                    <label className="flex items-center gap-2 text-xs text-ink-400 px-4 py-2">
+                      Opacity
+                      <input
+                        type="range" min={0} max={100} step={1}
+                        value={Math.round((overlay?.opacity ?? 1) * 100)}
+                        onChange={(e) => {
+                          const op = Number(e.target.value) / 100;
+                          setOverlay(prev => prev ? { ...prev, opacity: op } : null);
+                          redrawComposite();
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="tabular-nums w-8 text-right">{Math.round((overlay?.opacity ?? 1) * 100)}%</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-ink-400 px-4 py-2">
+                      Scale
+                      <input
+                        type="range" min={20} max={200} step={1}
+                        value={Math.round((overlay?.scale ?? 1) * 100)}
+                        onChange={(e) => {
+                          const sc = Number(e.target.value) / 100;
+                          setOverlay(prev => prev ? { ...prev, scale: sc } : null);
+                          redrawComposite();
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="tabular-nums w-8 text-right">{Math.round((overlay?.scale ?? 1) * 100)}%</span>
+                    </label>
+                    <LayerStack
+                      layers={overlayLayers} activeLayerId={overlayActiveLayerId ?? ""}
+                      onSelect={setOverlayActiveLayerId}
+                      onRemove={(id) => dispatchOverlayLayers({ type: "remove", id })}
+                      onToggleVisible={(id) => dispatchOverlayLayers({ type: "toggle-visible", id })}
+                      onSetIntensity={(id, intensity) => dispatchOverlayLayers({ type: "set-intensity", id, intensity })}
+                      onSetMask={(id, mask) => dispatchOverlayLayers({ type: "set-mask", id, mask })}
+                      onReorder={(from, to) => dispatchOverlayLayers({ type: "reorder", from, to })}
+                      dragSrcIdx={dragSrcIdxOverlay}
+                    />
+                    <AddLayerButton count={overlayLayers.length} onClick={() => setOverlayShowPresetModal(true)} />
+                    {overlayActiveLayer && (
+                      <div className="mt-4">
+                        <p className="text-[11px] uppercase tracking-wider text-ink-200 mb-2">Fine Tuning</p>
+                        <FineTuningPanel
+                          key={overlayActiveLayer.id}
+                          preset={PRESETS_BY_ID[overlayActiveLayer.preset]}
+                          params={overlayActiveLayer.params}
+                          setParams={(p) => dispatchOverlayLayers({ type: "set-params", id: overlayActiveLayer.id, params: p })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Export */}
             <div className="p-4 border-t border-ink-600 shrink-0">
+              <div className="mb-3">
+                <label className="block text-xs text-ink-400 mb-1">
+                  Width (px) <span className="text-ink-500">— leave blank to export at original size</span>
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={compositeExportWidth}
+                  onChange={(e) => setCompositeExportWidth(e.target.value)}
+                  placeholder="Original size"
+                  className="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-1.5 text-sm text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-accent-500 transition"
+                />
+              </div>
               <div role="group" aria-label="Export format" className="flex gap-1 mb-2">
                 {(["webp", "jpeg", "png"] as const).map((fmt) => (
                   <button
                     key={fmt}
                     type="button"
-                    onClick={() => { setExportFormat(fmt); setExportUrl(null); setExportError(null); }}
+                    onClick={() => { setExportFormat(fmt); setExportError(null); }}
                     className={[
                       "flex-1 text-xs uppercase py-1.5 rounded-md border transition",
                       exportFormat === fmt
@@ -1387,37 +1659,56 @@ export default function CompositeWorkspace() {
                 {exporting ? "Exporting…" : "Export Composite"}
               </button>
               {exportError && <p className="text-xs text-red-400 mt-2">{exportError}</p>}
-              {exportUrl && (
-                <a
-                  href={exportUrl}
-                  download={`composite.${exportFormat === "jpeg" ? "jpg" : exportFormat}`}
-                  className="block mt-2 text-xs text-accent-400 underline break-all"
-                >
-                  Download: composite.{exportFormat === "jpeg" ? "jpg" : exportFormat}
-                </a>
-              )}
             </div>
           </aside>
 
           {/* RIGHT PANEL — composite preview */}
           <section className="flex-1 min-w-0 bg-ink-900 flex flex-col overflow-hidden">
-            <div className="border-b border-ink-600 px-6 py-3 flex items-center justify-between shrink-0">
+            <div className="border-b border-ink-600 px-6 flex items-center justify-between shrink-0 min-h-[72px]">
               <span className="text-xs uppercase tracking-wider text-ink-200">Composite Preview</span>
               {activeSubject && (
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 text-xs text-ink-200">
-                    Scale
-                    <input
-                      type="range" min={20} max={200} step={1}
-                      value={Math.round(activeSubject.scale * 100)}
-                      onChange={(e) => setActiveSubjectScale(Number(e.target.value) / 100)}
-                      className="w-28"
-                    />
-                    <span className="tabular-nums w-8 text-right">{Math.round(activeSubject.scale * 100)}%</span>
-                  </label>
-                  <button type="button" onClick={resetActiveSubjectPosition} className="text-xs text-ink-200 hover:text-ink-100 transition">
-                    Reset Position
-                  </button>
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-ink-200">
+                      Scale
+                      <input
+                        type="range" min={20} max={200} step={1}
+                        value={Math.round(activeSubject.scale * 100)}
+                        onChange={(e) => setActiveSubjectScale(Number(e.target.value) / 100)}
+                        className="w-28"
+                      />
+                      <span className="tabular-nums w-8 text-right">{Math.round(activeSubject.scale * 100)}%</span>
+                    </label>
+                    <button type="button" onClick={resetActiveSubjectPosition} className="text-xs text-ink-200 hover:text-ink-100 transition">
+                      Reset Position
+                    </button>
+                  </div>
+                  {(() => {
+                    const subCanvas = subjectOffscreens.current.get(activeSubject.id);
+                    const naturalWidth = subCanvas?.width ?? null;
+                    const naturalHeight = subCanvas?.height ?? null;
+                    const displayWidth = naturalWidth ? Math.round(naturalWidth * activeSubject.scale) : null;
+                    const displayHeight = naturalHeight ? Math.round(naturalHeight * activeSubject.scale) : null;
+                    return (
+                      <div className="flex items-center gap-2 mt-2">
+                        <label className="text-xs text-ink-400 shrink-0">W (px)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={displayWidth ?? ""}
+                          onChange={(e) => {
+                            if (!naturalWidth) return;
+                            const newW = Number(e.target.value);
+                            if (newW > 0) setActiveSubjectScale(newW / naturalWidth);
+                          }}
+                          className="w-24 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-xs text-ink-100 focus:outline-none focus:border-accent-500 transition"
+                        />
+                        {displayHeight && (
+                          <span className="text-xs text-ink-500">× {displayHeight}px</span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -1469,6 +1760,14 @@ export default function CompositeWorkspace() {
           dispatchBg({ type: "add", preset: id, id: lid });
           setBgActiveLayerId(lid);
           setBgShowPresetModal(false);
+        }} />
+      )}
+      {overlayShowPresetModal && (
+        <PresetModal onClose={() => setOverlayShowPresetModal(false)} onSelect={(id) => {
+          const lid = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          dispatchOverlayLayers({ type: "add", preset: id, id: lid });
+          setOverlayActiveLayerId(lid);
+          setOverlayShowPresetModal(false);
         }} />
       )}
       {addingSubject && (
@@ -2155,7 +2454,7 @@ function LayerCard({
         </button>
         <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">{preset.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
-          {preset.pro && <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
+          {preset.pro && <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">Premium</span>}
           <button type="button" onClick={(e) => { e.stopPropagation(); setMaskOpen((v) => !v); }}
             className={["text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
               maskOpen || isMaskActive(layer.mask) ? "border-accent-500 text-accent-400 bg-accent-500/10" : "border-ink-400 text-ink-200 hover:text-white hover:border-ink-300"].join(" ")}>
@@ -2336,7 +2635,7 @@ function FineTuningPanel({ preset, params, setParams }: { preset: PresetDef; par
       {proControls.length > 0 && (
         <>
           <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
-            <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">Pro Enhancements</span>
+            <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">Premium Enhancements</span>
             <span className="flex-1 h-px bg-ink-600" />
           </div>
           {proControls.map((c) => <ControlInput key={c.key} control={c} value={params[c.key]} onChange={(v) => setParam(c.key, v)} />)}
@@ -2474,7 +2773,7 @@ function PresetModal({ onClose, onSelect }: { onClose: () => void; onSelect: (id
         <div className="grid grid-cols-2 gap-2">
           {PRESETS.map((p) => (
             <button key={p.id} type="button" onClick={() => onSelect(p.id)} className="relative text-left rounded-md border border-ink-600 bg-ink-700/60 hover:border-accent-500 px-3 py-2 transition">
-              {p.pro && <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
+              {p.pro && <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">Premium</span>}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
               <div className="text-[11px] text-ink-200 mt-0.5 leading-snug">{p.description}</div>
             </button>

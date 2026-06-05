@@ -23,6 +23,7 @@ interface LayerBody {
 interface ExportBody {
   imagePath?: string;
   format?: string;
+  exportWidth?: number | null;
   layers?: LayerBody[];
   seed?: number;
   overlayImagePath?: string | null;
@@ -117,10 +118,18 @@ export async function POST(req: NextRequest) {
   const exportFormat: "webp" | "jpeg" | "png" =
     format === "jpeg" || format === "png" ? format : "webp";
 
+  // Optional resize target width (px). Anything non-positive/invalid → null
+  // (export at original size).
+  const exportWidth =
+    typeof body.exportWidth === "number" && body.exportWidth > 0
+      ? Math.round(body.exportWidth)
+      : null;
+
   try {
     const result = await renderToWebp({
       imagePath,
       format: exportFormat,
+      exportWidth,
       layers: normalizedLayers,
       seed: typeof seed === "number" ? seed : 1,
       origin: originFromRequest(req),

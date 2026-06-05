@@ -16,6 +16,7 @@ export interface LayerDef {
 export interface ExportJob {
   imagePath: string; // public path like "/uploads/<uuid>.jpg"
   format?: "webp" | "jpeg" | "png"; // output encoding; defaults to webp
+  exportWidth?: number | null; // optional resize width (px); null = original size
   layers: LayerDef[];
   seed?: number;
   origin: string; // e.g. "http://localhost:3000"
@@ -166,6 +167,11 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     const fileName = `${id}.${ext}`;
     const filePath = path.join(EXPORTS_DIR, fileName);
     const encoder = sharp(pngBuffer);
+    // Optional downscale/upscale to a target width; Sharp preserves aspect
+    // ratio automatically when only a width is given.
+    if (job.exportWidth) {
+      encoder.resize(job.exportWidth);
+    }
     if (format === "jpeg") {
       await encoder.jpeg({ quality: 92 }).toFile(filePath);
     } else if (format === "png") {

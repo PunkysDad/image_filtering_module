@@ -296,7 +296,9 @@ export default function Dashboard() {
 
   const [exporting, setExporting] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [exportFileName, setExportFileName] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<"webp" | "jpeg" | "png">("webp");
+  const [exportWidth, setExportWidth] = useState<string>("");
   const [iframeReady, setIframeReady] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -409,6 +411,8 @@ export default function Dashboard() {
       const json = (await res.json()) as { imagePath: string };
       if (which === "base") {
         setBasePath(json.imagePath);
+        // A fresh image exports at its own original size by default.
+        setExportWidth("");
         // A fresh image makes the "settings were saved" banner obsolete.
         setShowRestoreBanner(false);
         try {
@@ -463,6 +467,7 @@ export default function Dashboard() {
         body: JSON.stringify({
           imagePath: basePath,
           format: exportFormat,
+          exportWidth: exportWidth ? Number(exportWidth) : null,
           layers: layers.map(layerForRender),
           seed: 1,
           overlayImagePath: overlayPath,
@@ -670,7 +675,7 @@ export default function Dashboard() {
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
               {tab === "composite" && (
                 <span className="ml-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                  PRO
+                  Premium
                 </span>
               )}
             </button>
@@ -798,10 +803,23 @@ export default function Dashboard() {
         </div>
       )}
 
-    {mainTab === "composite" && isPremium ? (
-      <CompositeWorkspace />
-    ) : (
-    <main className="flex-1 grid grid-cols-[380px_1fr] gap-0 grid-rows-[1fr] min-h-0 overflow-hidden">
+    {/* Composite stays mounted (premium only) and is shown/hidden via display
+        so its internal state (subjects, overlay, etc.) survives tab switches.
+        display:contents keeps its full-height flex layout when visible. */}
+    {isPremium && (
+      <div style={{ display: mainTab === "composite" && isPremium ? "contents" : "none" }}>
+        <CompositeWorkspace
+          onExportReady={(url, filename) => {
+            setExportFileName(filename);
+            setDownloadUrl(url);
+          }}
+        />
+      </div>
+    )}
+    <main
+      style={{ display: mainTab !== "composite" || !isPremium ? "grid" : "none" }}
+      className="flex-1 grid grid-cols-[380px_1fr] gap-0 grid-rows-[1fr] min-h-0 overflow-hidden"
+    >
       {/* LEFT PANEL */}
       <aside className="bg-ink-800 border-r border-ink-600 p-6 overflow-y-auto max-h-full">
         <header className="mb-6">
@@ -1032,6 +1050,19 @@ export default function Dashboard() {
         )}
 
         <Section title="Export">
+          <div className="mb-3">
+            <label className="block text-xs text-ink-100 mb-1">
+              Width (px) <span className="text-ink-100">— leave blank to export at original size</span>
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={exportWidth}
+              onChange={(e) => setExportWidth(e.target.value)}
+              placeholder="New width in px"
+              className="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-1.5 text-sm text-ink-100 placeholder:text-ink-100 focus:outline-none focus:border-accent-500 transition"
+            />
+          </div>
           <div
             role="group"
             aria-label="Export format"
@@ -1157,19 +1188,20 @@ export default function Dashboard() {
         />
       )}
 
-      {/* EXPORT READY MODAL */}
-      {downloadUrl && (
-        <ExportReadyModal
-          downloadUrl={downloadUrl}
-          onClose={() => setDownloadUrl(null)}
-        />
-      )}
-
       {/* AI TUTOR — fixed floating chat button + drawer.
           Hidden for Basic and unauthenticated users (isPremium from AuthContext). */}
       <AiTutor layers={layers} hslAdjustments={hslAdjustments} isPremium={isPremium} />
     </main>
-    )}
+
+      {/* EXPORT READY MODAL — top level so it renders on either tab (editor
+          export or composite export both set downloadUrl). */}
+      {downloadUrl && (
+        <ExportReadyModal
+          downloadUrl={downloadUrl}
+          fileName={exportFileName ?? undefined}
+          onClose={() => { setDownloadUrl(null); setExportFileName(null); }}
+        />
+      )}
 
       {/* AUTH MODAL — export gate + nav Sign In (state from AuthContext) */}
       {authMode && (
@@ -1332,10 +1364,10 @@ function LayerCard({
 
         {/* Right-side actions — always visible, never compressed */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {/* PRO badge */}
+          {/* Premium badge */}
           {preset.pro && (
             <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-              PRO
+              Premium
             </span>
           )}
 
@@ -1720,12 +1752,14 @@ function MaskPanel({
 
 function ExportReadyModal({
   downloadUrl,
+  fileName: fileNameProp,
   onClose,
 }: {
   downloadUrl: string;
+  fileName?: string;
   onClose: () => void;
 }) {
-  const fileName = downloadUrl.split("/").pop() || "export";
+  const fileName = fileNameProp ?? downloadUrl.split("/").pop() ?? "export";
   const format = (fileName.split(".").pop() || "").toUpperCase();
 
   return (
@@ -1845,7 +1879,7 @@ function PresetModal({
               >
                 {p.pro && (
                   <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                    PRO
+                    Premium
                   </span>
                 )}
                 <div className="text-sm text-ink-100 pr-7">{p.name}</div>
@@ -2203,7 +2237,7 @@ function FineTuningPanel({
         <>
           <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
             <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">
-              Pro Enhancements
+              Premium Enhancements
             </span>
             <span className="flex-1 h-px bg-ink-600" />
           </div>
@@ -2263,7 +2297,7 @@ function FilterPanel({
             >
               {p.pro && (
                 <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                  PRO
+                  Premium
                 </span>
               )}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
@@ -2289,7 +2323,7 @@ function FilterPanel({
             <>
               <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
                 <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">
-                  Pro Enhancements
+                  Premium Enhancements
                 </span>
                 <span className="flex-1 h-px bg-ink-600" />
               </div>
