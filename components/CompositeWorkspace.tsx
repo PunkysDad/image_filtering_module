@@ -2454,7 +2454,7 @@ function LayerCard({
         </button>
         <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">{preset.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
-          {preset.pro && <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
+          {preset.pro && <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">Premium</span>}
           <button type="button" onClick={(e) => { e.stopPropagation(); setMaskOpen((v) => !v); }}
             className={["text-[9px] font-medium px-1.5 py-0.5 rounded border transition-colors",
               maskOpen || isMaskActive(layer.mask) ? "border-accent-500 text-accent-400 bg-accent-500/10" : "border-ink-400 text-ink-200 hover:text-white hover:border-ink-300"].join(" ")}>
@@ -2635,7 +2635,7 @@ function FineTuningPanel({ preset, params, setParams }: { preset: PresetDef; par
       {proControls.length > 0 && (
         <>
           <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
-            <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">Pro Enhancements</span>
+            <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">Premium Enhancements</span>
             <span className="flex-1 h-px bg-ink-600" />
           </div>
           {proControls.map((c) => <ControlInput key={c.key} control={c} value={params[c.key]} onChange={(v) => setParam(c.key, v)} />)}
@@ -2773,7 +2773,7 @@ function PresetModal({ onClose, onSelect }: { onClose: () => void; onSelect: (id
         <div className="grid grid-cols-2 gap-2">
           {PRESETS.map((p) => (
             <button key={p.id} type="button" onClick={() => onSelect(p.id)} className="relative text-left rounded-md border border-ink-600 bg-ink-700/60 hover:border-accent-500 px-3 py-2 transition">
-              {p.pro && <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">PRO</span>}
+              {p.pro && <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">Premium</span>}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
               <div className="text-[11px] text-ink-200 mt-0.5 leading-snug">{p.description}</div>
             </button>

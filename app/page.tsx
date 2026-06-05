@@ -675,7 +675,7 @@ export default function Dashboard() {
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
               {tab === "composite" && (
                 <span className="ml-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                  PRO
+                  Premium
                 </span>
               )}
             </button>
@@ -1364,10 +1364,10 @@ function LayerCard({
 
         {/* Right-side actions — always visible, never compressed */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {/* PRO badge */}
+          {/* Premium badge */}
           {preset.pro && (
             <span className="rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-              PRO
+              Premium
             </span>
           )}
 
@@ -1879,7 +1879,7 @@ function PresetModal({
               >
                 {p.pro && (
                   <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                    PRO
+                    Premium
                   </span>
                 )}
                 <div className="text-sm text-ink-100 pr-7">{p.name}</div>
@@ -2237,7 +2237,7 @@ function FineTuningPanel({
         <>
           <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
             <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">
-              Pro Enhancements
+              Premium Enhancements
             </span>
             <span className="flex-1 h-px bg-ink-600" />
           </div>
@@ -2297,7 +2297,7 @@ function FilterPanel({
             >
               {p.pro && (
                 <span className="absolute top-1.5 right-1.5 rounded-sm bg-accent-500 text-ink-900 text-[9px] font-bold tracking-wider px-1 py-px leading-none">
-                  PRO
+                  Premium
                 </span>
               )}
               <div className="text-sm text-ink-100 pr-7">{p.name}</div>
@@ -2323,7 +2323,7 @@ function FilterPanel({
             <>
               <div className="flex items-center gap-2 pt-2 border-t border-ink-600">
                 <span className="text-[10px] uppercase tracking-wider text-accent-400 font-semibold">
-                  Pro Enhancements
+                  Premium Enhancements
                 </span>
                 <span className="flex-1 h-px bg-ink-600" />
               </div>

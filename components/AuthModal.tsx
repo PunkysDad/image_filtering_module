@@ -312,13 +312,13 @@ export default function AuthModal({
             title="Basic"
             price="$19.99/mo"
             blurb="Filters and editing tools"
-            warning={hasProLayers ? "⚠ Your current image uses Pro features" : undefined}
+            warning={hasProLayers ? "⚠ Your current image uses Premium features" : undefined}
             onClick={() => go(hasProLayers ? "pro-required" : "sign-up-basic")}
           />
           <PlanOption
             title="Premium"
             price="$29.99/mo"
-            blurb="Everything in Basic, plus Pro filters, Split Tone, Focal Blur, Composite workspace, and AI Assistant"
+            blurb="Everything in Basic, plus Premium filters, Split Tone, Focal Blur, Composite workspace, and AI Assistant"
             recommended
             onClick={() => go("sign-up-premium")}
           />
@@ -334,11 +334,11 @@ export default function AuthModal({
   } else if (mode === "pro-required") {
     content = (
       <>
-        <h2 className="text-base font-semibold text-white">Pro features detected</h2>
+        <h2 className="text-base font-semibold text-white">Premium features detected</h2>
         <p className="text-xs text-ink-200 mt-2 leading-relaxed">
-          Your current image uses Pro filters that are not available on the Basic
+          Your current image uses Premium filters that are not available on the Basic
           plan. You can still sign up for Basic, but this image cannot be exported
-          until Pro layers are removed.
+          until Premium layers are removed.
         </p>
         <div className="mt-5 space-y-2">
           <button type="button" className={primaryBtn} onClick={() => go("sign-up-premium")}>
@@ -512,10 +512,10 @@ export default function AuthModal({
     // export-blocked — authenticated Basic user with Pro layers active.
     content = (
       <>
-        <h2 className="text-base font-semibold text-white">Pro features detected</h2>
+        <h2 className="text-base font-semibold text-white">Premium features detected</h2>
         <p className="text-xs text-ink-200 mt-2 leading-relaxed">
-          Your current image uses Pro filters that are not available on the Basic
-          plan, so it cannot be exported. Upgrade to Premium, or remove the Pro
+          Your current image uses Premium filters that are not available on the Basic
+          plan, so it cannot be exported. Upgrade to Premium, or remove the Premium
           layers and try again.
         </p>
         <div className="mt-5 space-y-2">
