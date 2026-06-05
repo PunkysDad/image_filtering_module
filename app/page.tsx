@@ -2829,7 +2829,7 @@ function ChevronIcon({ open }: { open: boolean }) {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className="text-ink-500 shrink-0 transition-transform"
+      className="text-ink-200 shrink-0 transition-transform"
       style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
       aria-hidden="true"
     >

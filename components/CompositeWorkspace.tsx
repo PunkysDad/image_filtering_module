@@ -1563,7 +1563,7 @@ export default function CompositeWorkspace({
                 </div>
                 {overlayOpen && overlay && (
                   <div className="p-3 border-t border-ink-600 bg-ink-800">
-                    <label className="flex items-center gap-2 text-xs text-ink-400 px-4 py-2">
+                    <label className="flex items-center gap-2 text-xs text-ink-200 px-4 py-2">
                       Opacity
                       <input
                         type="range" min={0} max={100} step={1}
@@ -1577,7 +1577,7 @@ export default function CompositeWorkspace({
                       />
                       <span className="tabular-nums w-8 text-right">{Math.round((overlay?.opacity ?? 1) * 100)}%</span>
                     </label>
-                    <label className="flex items-center gap-2 text-xs text-ink-400 px-4 py-2">
+                    <label className="flex items-center gap-2 text-xs text-ink-200 px-4 py-2">
                       Scale
                       <input
                         type="range" min={20} max={200} step={1}
@@ -1621,8 +1621,8 @@ export default function CompositeWorkspace({
             {/* Export */}
             <div className="p-4 border-t border-ink-600 shrink-0">
               <div className="mb-3">
-                <label className="block text-xs text-ink-400 mb-1">
-                  Width (px) <span className="text-ink-500">— leave blank to export at original size</span>
+                <label className="block text-xs text-ink-200 mb-1">
+                  Width (px) <span className="text-ink-200">— leave blank to export at original size</span>
                 </label>
                 <input
                   type="number"
@@ -1630,7 +1630,7 @@ export default function CompositeWorkspace({
                   value={compositeExportWidth}
                   onChange={(e) => setCompositeExportWidth(e.target.value)}
                   placeholder="Original size"
-                  className="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-1.5 text-sm text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-accent-500 transition"
+                  className="w-full bg-ink-800 border border-ink-600 rounded-md px-3 py-1.5 text-sm text-ink-100 placeholder:text-ink-200 focus:outline-none focus:border-accent-500 transition"
                 />
               </div>
               <div role="group" aria-label="Export format" className="flex gap-1 mb-2">
@@ -1691,7 +1691,7 @@ export default function CompositeWorkspace({
                     const displayHeight = naturalHeight ? Math.round(naturalHeight * activeSubject.scale) : null;
                     return (
                       <div className="flex items-center gap-2 mt-2">
-                        <label className="text-xs text-ink-400 shrink-0">W (px)</label>
+                        <label className="text-xs text-ink-200 shrink-0">W (px)</label>
                         <input
                           type="number"
                           min={1}
@@ -1704,7 +1704,7 @@ export default function CompositeWorkspace({
                           className="w-24 bg-ink-800 border border-ink-600 rounded px-2 py-1 text-xs text-ink-100 focus:outline-none focus:border-accent-500 transition"
                         />
                         {displayHeight && (
-                          <span className="text-xs text-ink-500">× {displayHeight}px</span>
+                          <span className="text-xs text-ink-200">× {displayHeight}px</span>
                         )}
                       </div>
                     );
@@ -2073,7 +2073,7 @@ function StepIndicator({ currentStep }: { currentStep: 1 | 2 | 3 }) {
             {i > 0 && <span className="w-8 h-px bg-ink-600" />}
             <div className="flex items-center gap-2">
               <span className={["w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition",
-                active ? "bg-accent-500 text-white" : done ? "bg-ink-600 text-ink-200" : "bg-ink-700 text-ink-500"].join(" ")}>
+                active ? "bg-accent-500 text-white" : done ? "bg-ink-600 text-ink-200" : "bg-ink-700 text-ink-200"].join(" ")}>
                 {done ? "✓" : n}
               </span>
               <span className={["text-xs font-medium", active ? "text-ink-100" : "text-ink-200"].join(" ")}>{label}</span>
@@ -2449,7 +2449,7 @@ function LayerCard({
           <GripIcon />
         </span>
         <button type="button" onClick={(e) => { e.stopPropagation(); onToggleVisible(); }}
-          className={["shrink-0 transition-colors", layer.visible ? "text-ink-200 hover:text-ink-100" : "text-ink-500 hover:text-ink-200"].join(" ")}>
+          className={["shrink-0 transition-colors", layer.visible ? "text-ink-200 hover:text-ink-100" : "text-ink-200 hover:text-ink-200"].join(" ")}>
           <EyeIcon open={layer.visible} />
         </button>
         <span className="flex-1 text-xs text-ink-100 truncate min-w-0 mr-auto">{preset.name}</span>
@@ -2875,7 +2875,7 @@ function TrashIcon() {
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      className="text-ink-500 shrink-0 transition-transform" style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }} aria-hidden="true">
+      className="text-ink-200 shrink-0 transition-transform" style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }} aria-hidden="true">
       <polyline points="6 9 12 15 18 9"/>
     </svg>
   );

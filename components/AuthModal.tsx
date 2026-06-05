@@ -368,7 +368,7 @@ export default function AuthModal({
         </button>
         <div className="flex items-center gap-3 my-2">
           <div className="flex-1 h-px bg-ink-600" />
-          <span className="text-ink-400 text-xs">or</span>
+          <span className="text-ink-200 text-xs">or</span>
           <div className="flex-1 h-px bg-ink-600" />
         </div>
         <form onSubmit={signUpBasic} className="space-y-3">
@@ -401,7 +401,7 @@ export default function AuthModal({
         </button>
         <div className="flex items-center gap-3 my-2">
           <div className="flex-1 h-px bg-ink-600" />
-          <span className="text-ink-400 text-xs">or</span>
+          <span className="text-ink-200 text-xs">or</span>
           <div className="flex-1 h-px bg-ink-600" />
         </div>
         <form onSubmit={signUpPremium} className="space-y-3">
