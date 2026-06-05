@@ -19,13 +19,12 @@ type Message = { role: "user" | "assistant"; content: string };
 type Props = {
   layers: FilterLayer[];
   hslAdjustments: HslState;
-  // TODO: Replace with real subscription check when payments are implemented.
-  isPremium?: boolean;
+  isPremium: boolean;
 };
 
 // ---------- Component ----------
 
-export default function AiTutor({ layers, hslAdjustments, isPremium = true }: Props) {
+export default function AiTutor({ layers, hslAdjustments, isPremium }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -49,7 +48,6 @@ export default function AiTutor({ layers, hslAdjustments, isPremium = true }: Pr
     }
   }, [isOpen]);
 
-  // TODO: Replace isPremium check with real subscription data when payments are implemented.
   if (!isPremium) return null;
 
   async function sendMessage() {
