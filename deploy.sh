@@ -44,9 +44,50 @@ echo "==> Logging in to ECR (${REGISTRY})"
 aws ecr get-login-password --region "${AWS_REGION}" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
 
+echo "==> Fetching NEXT_PUBLIC vars from SSM"
+SUPABASE_URL=$(aws ssm get-parameter \
+  --region "${AWS_REGION}" \
+  --name "/picmagiq/NEXT_PUBLIC_SUPABASE_URL" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
+SUPABASE_KEY=$(aws ssm get-parameter \
+  --region "${AWS_REGION}" \
+  --name "/picmagiq/NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
+STRIPE_BASIC=$(aws ssm get-parameter \
+  --region "${AWS_REGION}" \
+  --name "/picmagiq/NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
+STRIPE_PREMIUM=$(aws ssm get-parameter \
+  --region "${AWS_REGION}" \
+  --name "/picmagiq/NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
+APP_URL=$(aws ssm get-parameter \
+  --region "${AWS_REGION}" \
+  --name "/picmagiq/NEXT_PUBLIC_APP_URL" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
 echo "==> Building image ${IMAGE_REPO}:${GIT_SHA}"
 docker build \
   --platform linux/amd64 \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL="${SUPABASE_URL}" \
+  --build-arg NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="${SUPABASE_KEY}" \
+  --build-arg NEXT_PUBLIC_STRIPE_BASIC_PRICE_ID="${STRIPE_BASIC}" \
+  --build-arg NEXT_PUBLIC_STRIPE_PREMIUM_PRICE_ID="${STRIPE_PREMIUM}" \
+  --build-arg NEXT_PUBLIC_APP_URL="${APP_URL}" \
   -t "${IMAGE_REPO}:latest" \
   -t "${IMAGE_REPO}:${GIT_SHA}" \
   .
