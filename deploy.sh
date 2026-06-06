@@ -161,6 +161,17 @@ NEW_IP=$(aws ec2 describe-network-interfaces \
 
 echo "==> New task IP: ${NEW_IP}"
 
+echo "==> Waiting for new task to be reachable on port 3000..."
+for i in $(seq 1 20); do
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${NEW_IP}:3000" || echo "000")
+  if [[ "${HTTP_CODE}" == "200" ]]; then
+    echo "    Task is reachable (HTTP ${HTTP_CODE})"
+    break
+  fi
+  echo "    Not reachable yet (HTTP ${HTTP_CODE}), waiting... (${i}/20)"
+  sleep 10
+done
+
 echo "==> Updating CloudFront origin to ${NEW_IP}.nip.io"
 ETAG=$(aws cloudfront get-distribution-config \
   --id "${CLOUDFRONT_DISTRIBUTION_ID}" \
