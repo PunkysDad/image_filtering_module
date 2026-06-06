@@ -103,11 +103,18 @@ aws ecs register-task-definition \
   --cli-input-json file://infra/task-definition.json \
   > /dev/null
 
-echo "==> Forcing new deployment on ${ECS_CLUSTER_NAME}/${ECS_SERVICE_NAME}"
+LATEST_TASK_DEF=$(aws ecs describe-task-definition \
+  --region "${AWS_REGION}" \
+  --task-definition "${ECS_CLUSTER_NAME%-cluster}" \
+  --query 'taskDefinition.taskDefinitionArn' \
+  --output text)
+
+echo "==> Updating service to task definition: ${LATEST_TASK_DEF}"
 aws ecs update-service \
   --region "${AWS_REGION}" \
   --cluster "${ECS_CLUSTER_NAME}" \
   --service "${ECS_SERVICE_NAME}" \
+  --task-definition "${LATEST_TASK_DEF}" \
   --force-new-deployment \
   > /dev/null
 
