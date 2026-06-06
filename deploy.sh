@@ -111,43 +111,45 @@ aws ecs update-service \
   --force-new-deployment \
   > /dev/null
 
-echo "==> Waiting for new task to reach RUNNING state..."
-for i in $(seq 1 30); do
-  TASK_ARN=$(aws ecs list-tasks \
+DEPLOY_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "==> Waiting for new task to reach RUNNING state (started after ${DEPLOY_START})..."
+NEW_TASK_ARN=""
+for i in $(seq 1 40); do
+  ALL_TASKS=$(aws ecs list-tasks \
     --region "${AWS_REGION}" \
     --cluster "${ECS_CLUSTER_NAME}" \
     --service-name "${ECS_SERVICE_NAME}" \
     --desired-status RUNNING \
-    --query 'taskArns[0]' \
-    --output text)
-  if [[ -n "${TASK_ARN}" && "${TASK_ARN}" != "None" ]]; then
-    STATUS=$(aws ecs describe-tasks \
+    --query 'taskArns' \
+    --output json)
+  for TASK in $(echo "${ALL_TASKS}" | python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)]"); do
+    TASK_INFO=$(aws ecs describe-tasks \
       --region "${AWS_REGION}" \
       --cluster "${ECS_CLUSTER_NAME}" \
-      --tasks "${TASK_ARN}" \
-      --query 'tasks[0].lastStatus' \
-      --output text)
+      --tasks "${TASK}" \
+      --query 'tasks[0].{status:lastStatus,started:startedAt}' \
+      --output json)
+    STATUS=$(echo "${TASK_INFO}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))")
     if [[ "${STATUS}" == "RUNNING" ]]; then
-      echo "    Task is RUNNING: ${TASK_ARN}"
-      break
+      NEW_TASK_ARN="${TASK}"
+      echo "    New task is RUNNING: ${NEW_TASK_ARN}"
+      break 2
     fi
-  fi
-  echo "    Waiting... (${i}/30)"
+  done
+  echo "    Waiting... (${i}/40)"
   sleep 10
 done
 
-echo "==> Getting new task public IP"
-TASK_ARN=$(aws ecs list-tasks \
-  --region "${AWS_REGION}" \
-  --cluster "${ECS_CLUSTER_NAME}" \
-  --service-name "${ECS_SERVICE_NAME}" \
-  --query 'taskArns[0]' \
-  --output text)
+if [[ -z "${NEW_TASK_ARN}" ]]; then
+  echo "ERROR: New task did not reach RUNNING state in time" >&2
+  exit 1
+fi
 
+echo "==> Getting new task public IP"
 ENI_ID=$(aws ecs describe-tasks \
   --region "${AWS_REGION}" \
   --cluster "${ECS_CLUSTER_NAME}" \
-  --tasks "${TASK_ARN}" \
+  --tasks "${NEW_TASK_ARN}" \
   --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
   --output text)
 
