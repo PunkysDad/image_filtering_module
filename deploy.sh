@@ -111,8 +111,30 @@ aws ecs update-service \
   --force-new-deployment \
   > /dev/null
 
-echo "==> Waiting for new task to start..."
-sleep 60
+echo "==> Waiting for new task to reach RUNNING state..."
+for i in $(seq 1 30); do
+  TASK_ARN=$(aws ecs list-tasks \
+    --region "${AWS_REGION}" \
+    --cluster "${ECS_CLUSTER_NAME}" \
+    --service-name "${ECS_SERVICE_NAME}" \
+    --desired-status RUNNING \
+    --query 'taskArns[0]' \
+    --output text)
+  if [[ -n "${TASK_ARN}" && "${TASK_ARN}" != "None" ]]; then
+    STATUS=$(aws ecs describe-tasks \
+      --region "${AWS_REGION}" \
+      --cluster "${ECS_CLUSTER_NAME}" \
+      --tasks "${TASK_ARN}" \
+      --query 'tasks[0].lastStatus' \
+      --output text)
+    if [[ "${STATUS}" == "RUNNING" ]]; then
+      echo "    Task is RUNNING: ${TASK_ARN}"
+      break
+    fi
+  fi
+  echo "    Waiting... (${i}/30)"
+  sleep 10
+done
 
 echo "==> Getting new task public IP"
 TASK_ARN=$(aws ecs list-tasks \
