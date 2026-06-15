@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/";
+  const next = searchParams.get("next") ?? "/editor";
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || origin;
 
   if (code) {
@@ -15,6 +15,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // If no code or exchange failed, redirect to home anyway
-  return NextResponse.redirect(`${appUrl}/`);
+  // If no code or exchange failed, redirect to editor anyway
+  return NextResponse.redirect(`${appUrl}/editor`);
 }

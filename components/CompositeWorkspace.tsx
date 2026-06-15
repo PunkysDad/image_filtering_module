@@ -24,7 +24,7 @@ import type {
   CurvePoint,
   CurveChannel,
   LayerCurves,
-} from "@/app/page";
+} from "@/app/editor/page";
 
 // ---------- Local type aliases ----------
 
