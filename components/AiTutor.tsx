@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { FilterLayer } from "@/app/page";
+import type { FilterLayer } from "@/app/editor/page";
 
 // ---------- Shared types ----------
 
