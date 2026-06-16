@@ -15,6 +15,9 @@ export default function MarketingNav() {
           <Link href="/luts" className="text-ink-300 text-sm hover:text-white transition-colors">
             Film LUTs
           </Link>
+          <Link href="/editor" className="text-ink-300 text-sm hover:text-white transition-colors">
+            Editor
+          </Link>
         </div>
         <div className="flex items-center gap-4">
           <Link href="/editor" className="text-ink-300 text-sm hover:text-white transition-colors">
@@ -64,6 +67,12 @@ export default function MarketingNav() {
             className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
           >
             Film LUTs
+          </Link>
+          <Link
+            href="/editor"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Editor
           </Link>
           <Link
             href="/editor"
