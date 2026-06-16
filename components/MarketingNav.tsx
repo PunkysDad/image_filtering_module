@@ -15,6 +15,48 @@ export default function MarketingNav() {
           <Link href="/luts" className="text-ink-300 text-sm hover:text-white transition-colors">
             Film LUTs
           </Link>
+          <div className="relative group">
+            <button className="text-ink-300 text-sm hover:text-white transition-colors cursor-default">
+              Features ▾
+            </button>
+            <div className="hidden group-hover:block absolute left-0 top-full pt-2 z-50">
+              <div className="bg-[#1a1a1a] border border-[#333333] rounded-md py-2 min-w-[200px] shadow-lg">
+                <Link
+                  href="/cinematic-filters"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  Cinematic Filters
+                </Link>
+                <Link
+                  href="/film-grain"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  Film Grain
+                </Link>
+                <Link
+                  href="/color-grading-for-marketers"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  Color Grading
+                </Link>
+                <Link
+                  href="/webp-export"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  WebP Export
+                </Link>
+                <Link
+                  href="/vs-photoshop"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  vs Photoshop
+                </Link>
+              </div>
+            </div>
+          </div>
+          <Link href="/blog" className="text-ink-300 text-sm hover:text-white transition-colors">
+            Blog
+          </Link>
         </div>
         <div className="flex items-center gap-4">
           <Link href="/editor" className="text-ink-300 text-sm hover:text-white transition-colors">
@@ -64,6 +106,42 @@ export default function MarketingNav() {
             className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
           >
             Film LUTs
+          </Link>
+          <Link
+            href="/cinematic-filters"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Cinematic Filters
+          </Link>
+          <Link
+            href="/film-grain"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Film Grain
+          </Link>
+          <Link
+            href="/color-grading-for-marketers"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Color Grading
+          </Link>
+          <Link
+            href="/webp-export"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            WebP Export
+          </Link>
+          <Link
+            href="/vs-photoshop"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            vs Photoshop
+          </Link>
+          <Link
+            href="/blog"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Blog
           </Link>
           <Link
             href="/editor"
