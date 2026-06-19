@@ -18,6 +18,8 @@ interface LayerBody {
   visible?: boolean;
   intensity?: number;
   params?: Record<string, unknown>;
+  mask?: unknown;
+  curves?: unknown;
 }
 
 interface ExportBody {
@@ -112,6 +114,8 @@ export async function POST(req: NextRequest) {
     visible: l.visible !== false,
     intensity: typeof l.intensity === "number" ? l.intensity : 100,
     params: l.params ?? {},
+    mask: l.mask ?? null,
+    curves: l.curves ?? null,
   }));
 
   // WebP is the default; only JPEG and PNG are otherwise accepted.
