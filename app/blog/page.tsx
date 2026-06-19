@@ -27,6 +27,14 @@ const jsonLd = {
 
 const posts = [
   {
+    category: "Design Workflow",
+    title: "How to Build a Branded Marketing Image with Compositing and Knockout Text",
+    excerpt:
+      "A practical walkthrough: combine multiple subjects into one image, grade them to match, then punch your headline through the result with knockout text — all in the browser, exported as WebP.",
+    readTime: "6 min read",
+    url: "/blog/composite-marketing-images",
+  },
+  {
     category: "CMS Workflow",
     title: "How to Give Your WordPress Site a Cinematic Look Without Photoshop",
     excerpt:

@@ -273,7 +273,7 @@ export default function HomePage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-500 shrink-0">✓</span>
-                  <span>Composite workspace — stack up to 5 layers</span>
+                  <span>Filter layer stack — up to 5 stacked filter layers</span>
                 </li>
               </ul>
               <Link
