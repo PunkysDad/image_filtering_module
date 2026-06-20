@@ -51,11 +51,26 @@ export default function MarketingNav() {
                 >
                   vs Photoshop
                 </Link>
+                <Link
+                  href="/compositing"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  Compositing
+                </Link>
+                <Link
+                  href="/knockout-text"
+                  className="block px-4 py-2 text-ink-300 text-sm hover:text-white hover:bg-ink-800 transition-colors"
+                >
+                  Knockout Text
+                </Link>
               </div>
             </div>
           </div>
           <Link href="/blog" className="text-ink-300 text-sm hover:text-white transition-colors">
             Blog
+          </Link>
+          <Link href="/editor" className="text-ink-300 text-sm hover:text-white transition-colors">
+            Editor
           </Link>
         </div>
         <div className="flex items-center gap-4">
@@ -138,10 +153,28 @@ export default function MarketingNav() {
             vs Photoshop
           </Link>
           <Link
+            href="/compositing"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Compositing
+          </Link>
+          <Link
+            href="/knockout-text"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Knockout Text
+          </Link>
+          <Link
             href="/blog"
             className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
           >
             Blog
+          </Link>
+          <Link
+            href="/editor"
+            className="block px-6 py-3 text-ink-300 hover:text-white hover:bg-ink-800 transition-colors border-t border-[#333333]"
+          >
+            Editor
           </Link>
           <Link
             href="/editor"

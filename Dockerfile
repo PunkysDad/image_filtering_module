@@ -44,7 +44,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 3: runner — lean production image with Chromium pre-installed
 # ---------------------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.47.0-jammy AS runner
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

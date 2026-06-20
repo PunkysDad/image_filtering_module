@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import MarketingNav from "@/components/MarketingNav";
+import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
   title: "picmagIQ — Professional Image Filters for Marketers",
@@ -14,31 +15,6 @@ export const metadata: Metadata = {
     siteName: "picmagIQ",
     type: "website",
   },
-};
-
-const jsonLd = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "picmagIQ",
-  applicationCategory: "MultimediaApplication",
-  operatingSystem: "Web",
-  url: "https://picmagiq.com",
-  offers: [
-    {
-      "@type": "Offer",
-      name: "Basic",
-      price: "19.99",
-      priceCurrency: "USD",
-      billingIncrement: "P1M",
-    },
-    {
-      "@type": "Offer",
-      name: "Premium",
-      price: "29.99",
-      priceCurrency: "USD",
-      billingIncrement: "P1M",
-    },
-  ],
 };
 
 const CANVAS_PRESETS = [
@@ -99,15 +75,26 @@ const PREMIUM_PRESETS = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   return (
     <div className="min-h-screen bg-ink-900 text-ink-100">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-
       <MarketingNav />
+
+      {user && (
+        <div className="bg-ink-800 py-3 px-6 text-center">
+          <span className="text-ink-200 text-sm">
+            Welcome back{user.email ? `, ${user.email.split("@")[0]}` : ""}.{" "}
+          </span>
+          <Link href="/editor" className="text-accent-500 hover:text-accent-400 text-sm font-medium transition-colors">
+            Go to Editor →
+          </Link>
+        </div>
+      )}
 
       {/* Hero */}
       <section className="py-24 px-6">
@@ -123,18 +110,29 @@ export default function HomePage() {
             developer ticket. No friction.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link
-              href="/editor"
-              className="bg-accent-500 hover:bg-accent-400 text-white font-semibold px-8 py-3 rounded text-base transition-colors"
-            >
-              Start Free Trial
-            </Link>
-            <Link
-              href="/editor"
-              className="border border-ink-500 text-ink-100 hover:border-ink-300 hover:text-white font-semibold px-8 py-3 rounded text-base transition-colors"
-            >
-              Sign In
-            </Link>
+            {user ? (
+              <Link
+                href="/editor"
+                className="bg-accent-500 hover:bg-accent-400 text-white font-semibold px-8 py-3 rounded text-base transition-colors"
+              >
+                Go to Editor
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/editor"
+                  className="bg-accent-500 hover:bg-accent-400 text-white font-semibold px-8 py-3 rounded text-base transition-colors"
+                >
+                  Start Free Trial
+                </Link>
+                <Link
+                  href="/editor"
+                  className="border border-ink-500 text-ink-100 hover:border-ink-300 hover:text-white font-semibold px-8 py-3 rounded text-base transition-colors"
+                >
+                  Sign In
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -246,6 +244,34 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Creative Tools Teaser */}
+      <section className="py-16 px-6">
+        <div className="max-w-2xl mx-auto text-center">
+          <h2 className="text-2xl font-bold text-white mb-4">
+            More than filters — build the whole image
+          </h2>
+          <p className="text-ink-300 leading-relaxed mb-6">
+            Premium adds creative tools built for marketing images, not pixel-level retouching. The{" "}
+            <Link
+              href="/compositing"
+              className="text-accent-500 hover:text-accent-400 transition-colors"
+            >
+              Composite Workspace
+            </Link>{" "}
+            combines multiple subjects into one image with automatic background removal — product
+            shots, team photos, and cutouts arranged into a single branded visual. Focal Blur adds a
+            WebGL zoom and radial blur with an on-preview focal region, drawing the eye straight to
+            your subject.
+          </p>
+          <Link
+            href="/compositing"
+            className="text-accent-500 hover:text-accent-400 transition-colors font-medium"
+          >
+            Explore the Composite Workspace →
+          </Link>
+        </div>
+      </section>
+
       {/* Pricing */}
       <section className="py-20 px-6 bg-ink-800">
         <div className="max-w-4xl mx-auto">
@@ -273,7 +299,7 @@ export default function HomePage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-500 shrink-0">✓</span>
-                  <span>Composite workspace — stack up to 5 layers</span>
+                  <span>Filter layer stack — up to 5 stacked filter layers</span>
                 </li>
               </ul>
               <Link
@@ -309,6 +335,17 @@ export default function HomePage() {
                     All 6 LUT / WebGL presets — Kodak 2383, Bleach Bypass, Split Tone Pro, and
                     more
                   </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-accent-500 shrink-0">✓</span>
+                  <span>
+                    Composite Workspace — combine multiple subjects into one image with automatic
+                    background removal
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-accent-500 shrink-0">✓</span>
+                  <span>Focal Blur — WebGL zoom / radial blur with an on-preview focal region</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-500 shrink-0">✓</span>
