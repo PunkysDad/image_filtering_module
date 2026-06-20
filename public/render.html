@@ -627,9 +627,56 @@ void main() {
           else currentOverlayUrl = url;
           await new Promise((resolve, reject) => {
             img.onload = () => resolve();
-            img.onerror = reject;
+            // Reject with a real Error (img.onerror yields a DOM Event with no
+            // .message) so failures surface a useful cause, not "[object Event]".
+            img.onerror = () => reject(new Error("Failed to load " + which + " image: " + url));
             img.src = url;
           });
+        }
+
+        // Resolution cap (EXPORT path only). The render canvas is what
+        // getImageData / applyMask / applyCurves operate on, so it must never
+        // exceed the size we will deliver — rendering larger is wasted memory
+        // and, at full source resolution on large images, enough to OOM-kill
+        // the headless render tab. We downscale the SOURCE RASTER up front so
+        // renderScene (which sizes the canvas from the source's intrinsic
+        // dimensions) builds a capped canvas, and the mask math runs at the
+        // capped resolution.
+        //
+        // Only the export path supplies renderWidth / maxEdge; the preview
+        // (postMessage) path leaves both null, so preview resolution is
+        // unchanged. Downscale only — never upscale here (the final encode
+        // step handles any requested upscale).
+        async function prepareRenderSource(img, renderWidth, maxEdge) {
+          const nw = img.naturalWidth;
+          const nh = img.naturalHeight;
+          let tw = nw;
+          let th = nh;
+          if (typeof renderWidth === "number" && renderWidth > 0 && renderWidth < nw) {
+            // Explicit export width: render at exactly that width.
+            tw = Math.round(renderWidth);
+            th = Math.max(1, Math.round(nh * (tw / nw)));
+          } else if (typeof maxEdge === "number" && maxEdge > 0) {
+            // No explicit width: clamp the longest edge.
+            const longest = Math.max(nw, nh);
+            if (longest > maxEdge) {
+              const scale = maxEdge / longest;
+              tw = Math.max(1, Math.round(nw * scale));
+              th = Math.max(1, Math.round(nh * scale));
+            }
+          }
+          if (tw === nw && th === nh) return img; // within cap — untouched
+          const off = document.createElement("canvas");
+          off.width = tw;
+          off.height = th;
+          off.getContext("2d").drawImage(img, 0, 0, tw, th);
+          const scaled = new Image();
+          await new Promise((resolve, reject) => {
+            scaled.onload = () => resolve();
+            scaled.onerror = reject;
+            scaled.src = off.toDataURL("image/png");
+          });
+          return scaled;
         }
 
         // Draw the knockout-text mask into the overlay canvas using
@@ -680,7 +727,10 @@ void main() {
         async function render(cfg) {
           const myToken = ++renderToken;
           window.renderComplete = false;
+          window.renderError = null;
+          window.renderErrorStack = null;
           document.body.removeAttribute("data-render-complete");
+          document.body.removeAttribute("data-render-error");
           try {
             await loadIntoImage(baseImg, cfg.imageUrl, "base");
             const overlayWanted =
@@ -700,8 +750,19 @@ void main() {
 
             if (myToken !== renderToken) return;
 
+            // Apply the export-path resolution cap before rendering so the
+            // canvas the mask math reads from is no larger than the delivered
+            // output. Preview leaves renderWidth/maxEdge null → no cap.
+            const renderBase = await prepareRenderSource(
+              baseImg,
+              cfg.renderWidth,
+              cfg.maxEdge,
+            );
+
+            if (myToken !== renderToken) return;
+
             await window.ImageFilters.renderScene({
-              img: baseImg,
+              img: renderBase,
               svgDefs,
               canvas,
               layers: cfg.layers || [],
@@ -741,7 +802,12 @@ void main() {
               );
           } catch (err) {
             window.renderError = String(err && err.message ? err.message : err);
+            window.renderErrorStack = err && err.stack ? String(err.stack) : null;
             console.warn("[render.html] render failed:", window.renderError);
+            // Self-report the failure so the export pipeline surfaces a real
+            // error instead of timing out blind. Note: data-render-complete is
+            // intentionally NOT set on the error path.
+            document.body.setAttribute("data-render-error", window.renderError);
             window.parent &&
               window.parent !== window &&
               window.parent.postMessage(
@@ -767,6 +833,9 @@ void main() {
             fontWeight:
               typeof data.fontWeight === "number" ? data.fontWeight : 900,
             hslAdjustments: data.hslAdjustments || null,
+            // Resolution cap (export path only). Null on the preview path.
+            renderWidth: typeof data.renderWidth === "number" ? data.renderWidth : null,
+            maxEdge: typeof data.maxEdge === "number" ? data.maxEdge : null,
           };
         }
 
@@ -819,6 +888,10 @@ void main() {
               ? parseFloat(q.get("fontWeight"))
               : undefined,
             hslAdjustments: parseJson(q.get("hsl"), null),
+            renderWidth: q.get("renderWidth")
+              ? parseFloat(q.get("renderWidth"))
+              : undefined,
+            maxEdge: q.get("maxEdge") ? parseFloat(q.get("maxEdge")) : undefined,
           });
         }
 
