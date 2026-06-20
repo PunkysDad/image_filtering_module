@@ -77,12 +77,29 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
+  // [TEMP DIAGNOSTIC LOGGING — remove after mask/curves export timeout is diagnosed]
+  page.on("console", (m) => console.log("[render console]", m.type(), m.text()));
+  page.on("pageerror", (e) => console.log("[render pageerror]", e.message, e.stack));
+  // [END TEMP DIAGNOSTIC LOGGING]
   try {
     const absImageUrl = new URL(job.imagePath, job.origin).toString();
     const url = new URL("/render.html", job.origin);
     url.searchParams.set("image", absImageUrl);
     url.searchParams.set("layers", JSON.stringify(job.layers));
     url.searchParams.set("seed", String(job.seed ?? 1));
+
+    // Resolution cap for the in-browser render canvas (where getImageData /
+    // applyMask / applyCurves run). Render no larger than we will deliver:
+    //   - explicit export width → render the canvas at that width
+    //   - otherwise            → clamp the longest edge to 3000px
+    // This bounds the memory of the mask passes and prevents OOM of the render
+    // tab on large sources. The final size is decided here, so Sharp's resize
+    // below is a no-op for the explicit-width case (canvas is already that
+    // width) and is skipped entirely when no width is requested.
+    if (job.exportWidth) {
+      url.searchParams.set("renderWidth", String(job.exportWidth));
+    }
+    url.searchParams.set("maxEdge", "3000");
 
     if (job.hslAdjustments) {
       url.searchParams.set("hsl", JSON.stringify(job.hslAdjustments));
@@ -119,9 +136,46 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     }
 
     await page.goto(url.toString(), { waitUntil: "load", timeout: 30_000 });
-    await page.waitForSelector('body[data-render-complete="true"]', {
-      timeout: 15_000,
+    // Wait for the render to either complete OR self-report an error. The
+    // timeout remains a backstop for a tab that dies without running its catch
+    // (e.g. an OOM kill).
+    // [TEMP DIAGNOSTIC LOGGING — remove after mask/curves export timeout is diagnosed]
+    try {
+      await page.waitForSelector(
+        'body[data-render-complete="true"], body[data-render-error]',
+        { timeout: 15_000 },
+      );
+    } catch (waitErr) {
+      const diag = await page
+        .evaluate(() => ({
+          bodyLen: document.body ? document.body.outerHTML.length : -1,
+          renderComplete: document.body?.getAttribute("data-render-complete"),
+          renderError: document.body?.getAttribute("data-render-error"),
+          windowRenderError: (window as unknown as { renderError?: string }).renderError ?? null,
+        }))
+        .catch((e) => ({ evalFailed: String(e) }));
+      console.log("[render timeout diag]", JSON.stringify(diag));
+      throw waitErr;
+    }
+    // [END TEMP DIAGNOSTIC LOGGING]
+
+    // If the render context reported an error, surface it as a real Error so
+    // the server log shows the actual cause instead of a bare timeout.
+    const renderError = await page.evaluate(() => {
+      if (!document.body || !document.body.hasAttribute("data-render-error")) {
+        return null;
+      }
+      return {
+        message: document.body.getAttribute("data-render-error") || "unknown",
+        stack: (window as unknown as { renderErrorStack?: string | null }).renderErrorStack ?? null,
+      };
     });
+    if (renderError) {
+      throw new Error(
+        `Render failed in browser context: ${renderError.message}` +
+          (renderError.stack ? `\n${renderError.stack}` : ""),
+      );
+    }
 
     // Resize viewport to the canvas pixel dimensions so nothing is clipped if
     // we ever swap to a page/element screenshot; harmless for the toDataURL
@@ -169,8 +223,13 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     const fileName = `${id}.${ext}`;
     const filePath = path.join(EXPORTS_DIR, fileName);
     const encoder = sharp(pngBuffer);
-    // Optional downscale/upscale to a target width; Sharp preserves aspect
-    // ratio automatically when only a width is given.
+    // The render canvas is already sized to the delivered output (see the
+    // renderWidth/maxEdge cap above), so this is not a second downscale:
+    //   - explicit width ≤ source → canvas is already that width; resize is a
+    //     no-op that just guarantees the exact requested width.
+    //   - explicit width > source → the canvas only downscales, so this is the
+    //     single upscale-on-encode to the requested width.
+    //   - no width → skipped; the capped canvas is the final size.
     if (job.exportWidth) {
       encoder.resize(job.exportWidth);
     }
