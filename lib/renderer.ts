@@ -11,6 +11,8 @@ export interface LayerDef {
   visible: boolean;
   intensity: number;
   params: Record<string, unknown>;
+  mask?: unknown;
+  curves?: unknown;
 }
 
 export interface ExportJob {

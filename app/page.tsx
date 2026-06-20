@@ -244,6 +244,34 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {/* Creative Tools Teaser */}
+      <section className="py-16 px-6">
+        <div className="max-w-2xl mx-auto text-center">
+          <h2 className="text-2xl font-bold text-white mb-4">
+            More than filters — build the whole image
+          </h2>
+          <p className="text-ink-300 leading-relaxed mb-6">
+            Premium adds creative tools built for marketing images, not pixel-level retouching. The{" "}
+            <Link
+              href="/compositing"
+              className="text-accent-500 hover:text-accent-400 transition-colors"
+            >
+              Composite Workspace
+            </Link>{" "}
+            combines multiple subjects into one image with automatic background removal — product
+            shots, team photos, and cutouts arranged into a single branded visual. Focal Blur adds a
+            WebGL zoom and radial blur with an on-preview focal region, drawing the eye straight to
+            your subject.
+          </p>
+          <Link
+            href="/compositing"
+            className="text-accent-500 hover:text-accent-400 transition-colors font-medium"
+          >
+            Explore the Composite Workspace →
+          </Link>
+        </div>
+      </section>
+
       {/* Pricing */}
       <section className="py-20 px-6 bg-ink-800">
         <div className="max-w-4xl mx-auto">
@@ -271,7 +299,7 @@ export default async function HomePage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-500 shrink-0">✓</span>
-                  <span>Composite workspace — stack up to 5 layers</span>
+                  <span>Filter layer stack — up to 5 stacked filter layers</span>
                 </li>
               </ul>
               <Link
@@ -307,6 +335,17 @@ export default async function HomePage() {
                     All 6 LUT / WebGL presets — Kodak 2383, Bleach Bypass, Split Tone Pro, and
                     more
                   </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-accent-500 shrink-0">✓</span>
+                  <span>
+                    Composite Workspace — combine multiple subjects into one image with automatic
+                    background removal
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-accent-500 shrink-0">✓</span>
+                  <span>Focal Blur — WebGL zoom / radial blur with an on-preview focal region</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-accent-500 shrink-0">✓</span>
