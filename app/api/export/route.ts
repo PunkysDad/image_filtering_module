@@ -6,13 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-function originFromRequest(req: NextRequest): string {
-  const forwardedHost = req.headers.get("x-forwarded-host");
-  const host = forwardedHost || req.headers.get("host") || "localhost:3000";
-  const proto = req.headers.get("x-forwarded-proto") || "http";
-  return `${proto}://${host}`;
-}
-
 interface LayerBody {
   preset: string;
   visible?: boolean;
@@ -136,7 +129,6 @@ export async function POST(req: NextRequest) {
       exportWidth,
       layers: normalizedLayers,
       seed: typeof seed === "number" ? seed : 1,
-      origin: originFromRequest(req),
       overlayImagePath: overlayImagePath ?? null,
       overlayPreset: (overlayPreset ?? null) as PresetId | null,
       overlayParams: overlayParams ?? null,
