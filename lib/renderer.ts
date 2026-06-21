@@ -21,7 +21,6 @@ export interface ExportJob {
   exportWidth?: number | null; // optional resize width (px); null = original size
   layers: LayerDef[];
   seed?: number;
-  origin: string; // e.g. "http://localhost:3000"
 
   // Optional overlay layer + knockout-text composition.
   overlayImagePath?: string | null;
@@ -82,8 +81,15 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
   page.on("pageerror", (e) => console.log("[render pageerror]", e.message, e.stack));
   // [END TEMP DIAGNOSTIC LOGGING]
   try {
-    const absImageUrl = new URL(job.imagePath, job.origin).toString();
-    const url = new URL("/render.html", job.origin);
+    // The render browser and the Next server run in the same task, so render
+    // assets (render.html + the source/overlay images, all served by this
+    // process) must be fetched from LOOPBACK — never via a header-derived
+    // public origin. In production that public origin is the CloudFront edge,
+    // where the source-image GET 403s and the render times out. Locally this
+    // is the same localhost:3000 it always was.
+    const renderBase = `http://127.0.0.1:${process.env.PORT || "3000"}`;
+    const absImageUrl = new URL(job.imagePath, renderBase).toString();
+    const url = new URL("/render.html", renderBase);
     url.searchParams.set("image", absImageUrl);
     url.searchParams.set("layers", JSON.stringify(job.layers));
     url.searchParams.set("seed", String(job.seed ?? 1));
@@ -106,7 +112,7 @@ async function runExport(job: ExportJob): Promise<ExportResult> {
     }
 
     if (job.overlayImagePath) {
-      const absOverlay = new URL(job.overlayImagePath, job.origin).toString();
+      const absOverlay = new URL(job.overlayImagePath, renderBase).toString();
       url.searchParams.set("overlayImage", absOverlay);
       if (job.overlayPreset) {
         url.searchParams.set("overlayPreset", job.overlayPreset);
