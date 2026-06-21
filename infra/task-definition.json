@@ -27,7 +27,8 @@
       "environment": [
         { "name": "NODE_ENV", "value": "production" },
         { "name": "PLAYWRIGHT_BROWSERS_PATH", "value": "/ms-playwright" },
-        { "name": "NEXT_TELEMETRY_DISABLED", "value": "1" }
+        { "name": "NEXT_TELEMETRY_DISABLED", "value": "1" },
+        { "name": "HOSTNAME", "value": "0.0.0.0" }
       ],
       "secrets": [
         { "name": "NEXT_PUBLIC_SUPABASE_URL", "valueFrom": "arn:aws:ssm:us-east-1:565122144780:parameter/picmagiq/NEXT_PUBLIC_SUPABASE_URL" },
